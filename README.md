@@ -1,4 +1,4 @@
-# Mixture-of-Hierarchy-Mamba
+# Mixture-of-Hierarchy-Mamba (In preparation ICLR 2027)
 
 Research code for hierarchical and multi-scale Mamba diffusion experiments built on
 top of [CompVis/ZigMa](https://github.com/CompVis/zigma).
