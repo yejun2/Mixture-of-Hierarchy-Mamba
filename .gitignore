@@ -1,11 +1,35 @@
 video_metrics/fvd/styleganv/i3d_torchscript.pt
 video_metrics/fvd/videogpt/i3d_pretrained_400.pt
+
+# Experiment outputs and generated artifacts
 outputs/
-*.pyc
-__pycache__
-/wandb
 checkpoints
+**/checkpoints/
 samples/
+wandb/
+/wandb/
+logs/
+**/logs/
+*.log
+log.txt
+*.out
+*.err
+
+# Local reports / paper drafts
+papers/
+report/
+reports/
+
+# Local secrets and service configs
+config/wandb/
+
+# Python cache
+*.pyc
+__pycache__/
+
+# Generated examples
 example_2d.png
 peano_curve.png
+
+# External/local dependency checkout
 dis_mamba/

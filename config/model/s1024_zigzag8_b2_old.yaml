@@ -7,4 +7,13 @@ params:
     embed_dim: 768 
     depth: 24  
     scan_type: zigzagN8
+    hierarchical_context: false
+    hierarchy_window_size: 4
+    hierarchy_stride: 4
+    context_compress_type: mean
+    hierarchy_max_stages: null
+    hierarchy_stage_depths: null
+    hierarchy_stage_depth: null
+    hierarchy_allow_partial: false
+    hierarchical_output_mode: prediction
    

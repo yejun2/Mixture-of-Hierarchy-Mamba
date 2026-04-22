@@ -20,6 +20,7 @@ log_every: 100
 ckpt_every: 50_000
 sample_every: 10_000
 max_grad_norm: 2.0
+gradient_accumulation_steps: 1
 
 
 
@@ -54,7 +55,6 @@ hydra:
     #dir: outputs/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}_${now}
   job:
     name: ${model.name}_${data.name}_bs${data.batch_size}
-
 
 
 

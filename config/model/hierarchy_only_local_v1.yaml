@@ -1,0 +1,29 @@
+name: hierarchy_only_local_v1
+target: model_hierarchy_only.HierarchicalMambaLocal
+params:
+    img_dim: 32
+    in_channels: 4
+    out_channels: 4
+    patch_size: 1
+    embed_dim: 192
+    scan_type: zigzagN8
+    use_pe: 2
+    hierarchy_window_size: 2
+    hierarchy_stride: 1
+    first_layer_stride: null
+    hierarchy_stage_depth: 3
+    hierarchy_max_stages: null
+    hierarchy_allow_partial: false
+    context_compress_type: last
+    share_stage_processor: false
+    hierarchical_output_mode: prediction
+    use_multiscale_fusion_head: false
+    fusion_mode: concat
+    fusion_selected_stages: "8,4,2,1"
+    fusion_anchor_resolution: 4
+    fusion_stage_dim: 256
+    fusion_gate_type: stage_timestep
+    fusion_pos_embed_type: anchor_shared
+    fusion_block_depth: 1
+    fusion_prediction_head_type: anchor_direct
+    fusion_logging_verbose: true

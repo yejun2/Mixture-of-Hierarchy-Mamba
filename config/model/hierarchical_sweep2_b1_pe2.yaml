@@ -1,14 +1,14 @@
-name: zigzagN8_b1_pe2
+name: hierarchical_sweep2_b1_pe2
 target: model_zigma.ZigMa
 params:
     img_dim: 32
     in_channels: 4
     patch_size: 1
     embed_dim: 768
-    depth: 24  
-    scan_type: zigzagN8
+    depth: 24
+    scan_type: v2
     use_pe: 2
-    hierarchical_context: false
+    hierarchical_context: true
     hierarchy_window_size: 4
     hierarchy_stride: 4
     context_compress_type: mean
@@ -16,8 +16,4 @@ params:
     hierarchy_stage_depths: null
     hierarchy_stage_depth: null
     hierarchy_allow_partial: false
-    hierarchical_output_mode: prediction
-   
-
-
- 
+    hierarchical_output_mode: context

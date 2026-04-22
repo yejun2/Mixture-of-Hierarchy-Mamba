@@ -12,6 +12,7 @@
 import copy
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Mlp
@@ -48,6 +49,43 @@ else:
     except:
         ATTENTION_MODE = "math"
 print(f"attention mode is {ATTENTION_MODE}")
+
+
+def compute_window_grid_size(size, window_size, stride):
+    if size <= 0:
+        raise ValueError(f"size must be positive, got {size}")
+    if window_size <= 0 or stride <= 0:
+        raise ValueError(
+            f"window_size and stride must be positive, got {window_size}, {stride}"
+        )
+    if size <= window_size:
+        return 1, max(0, window_size - size)
+    remainder = (size - window_size) % stride
+    pad = 0 if remainder == 0 else stride - remainder
+    grid = (size + pad - window_size) // stride + 1
+    return grid, pad
+
+
+def pool_tokens(tokens, compress_type):
+    if compress_type == "last":
+        return tokens[:, -1, :]
+    if compress_type == "mean":
+        return tokens.mean(dim=1)
+    raise ValueError(f"Unsupported context_compress_type: {compress_type}")
+
+
+def map_to_tokens(context_map):
+    b, h, w, c = context_map.shape
+    return context_map.reshape(b, h * w, c)
+
+
+def tokens_to_map(tokens, spatial_size):
+    h, w = spatial_size
+    b, n, c = tokens.shape
+    assert (
+        n == h * w
+    ), f"Token count {n} does not match spatial size {spatial_size} ({h * w})"
+    return tokens.reshape(b, h, w, c)
 
 
 def modulate(x, shift, scale):
@@ -337,6 +375,24 @@ class FinalLayer(nn.Module):
         return x
 
 
+class HierarchicalFinalLayer(nn.Module):
+    """Consume the final global context directly without any top-down reconstruction."""
+
+    def __init__(self, hidden_size, output_tokens, patch_size, out_channels):
+        super().__init__()
+        self.output_tokens = output_tokens
+        self.patch_dim = patch_size * patch_size * out_channels
+        self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.linear = nn.Linear(hidden_size, output_tokens * self.patch_dim, bias=True)
+
+    def forward(self, x):
+        # x is the pure bottom-up hierarchy output with shape [B, 1, C].
+        x = self.norm_final(x[:, 0, :])
+        x = self.linear(x)
+        x = x.reshape(x.shape[0], self.output_tokens, self.patch_dim)
+        return x
+
+
 class Block(nn.Module):
     def __init__(
         self,
@@ -509,6 +565,262 @@ def create_block(
     return block
 
 
+def build_scan_block_kwargs(
+    scan_type,
+    patch_side_len,
+    depth,
+    device,
+    extras=0,
+    video_frames=0,
+):
+    block_kwargs = {}
+    if (
+        scan_type.startswith("zigzagN")
+        or scan_type.startswith("hilbertN")
+        or scan_type.startswith("randomN")
+        or scan_type.startswith("parallelN")
+        or scan_type == "fixed2x2"
+    ):
+        if scan_type == "fixed2x2":
+            if patch_side_len != 2:
+                raise ValueError(
+                    f"fixed2x2 requires patch_side_len == 2, got {patch_side_len}"
+                )
+            zz_paths = [np.arange(4)]
+        elif scan_type.startswith("zigzagN") or scan_type.startswith("parallelN"):
+            _zz_paths = zigzag_path(N=patch_side_len)
+            if scan_type.startswith("zigzagN"):
+                zigzag_num = int(scan_type.replace("zigzagN", ""))
+                zz_paths = _zz_paths[:zigzag_num]
+                assert len(zz_paths) == zigzag_num, f"{len(zz_paths)} != {zigzag_num}"
+            elif scan_type.startswith("parallelN"):
+                zz_paths = _zz_paths[:8]
+            else:
+                raise ValueError("scan_type should be xx")
+        elif scan_type.startswith("hilbertN"):
+            _zz_paths = hilbert_path(N=patch_side_len)
+            zigzag_num = int(scan_type.replace("hilbertN", ""))
+            zz_paths = _zz_paths[:zigzag_num]
+            assert len(zz_paths) == zigzag_num, f"{len(zz_paths)} != {zigzag_num}"
+        elif scan_type.startswith("randomN"):
+            zigzag_num = int(scan_type.replace("randomN", ""))
+            zz_paths = []
+            for _ in range(zigzag_num):
+                _tmp = np.arange(patch_side_len**2)
+                np.random.shuffle(_tmp)
+                zz_paths.append(_tmp)
+        else:
+            raise ValueError(f"scan_type {scan_type} doenst match")
+
+        zz_paths_rev = [reverse_permut_np(_) for _ in zz_paths]
+        zz_paths = zz_paths * depth
+        zz_paths_rev = zz_paths_rev * depth
+        zz_paths = [torch.from_numpy(_).to(device) for _ in zz_paths]
+        zz_paths_rev = [torch.from_numpy(_).to(device) for _ in zz_paths_rev]
+        block_kwargs["zigzag_paths"] = zz_paths
+        block_kwargs["zigzag_paths_reverse"] = zz_paths_rev
+        block_kwargs["extras"] = extras
+        return block_kwargs
+
+    if scan_type.startswith("zzvideo_"):
+        st_order = list(scan_type.replace("zzvideo_", ""))
+        assert len(set(st_order)) == 2
+        st_order = st_order * depth
+        zz_paths = zigzag_path(N=patch_side_len)
+        zz_paths_rev = [reverse_permut_np(_) for _ in zz_paths]
+        zz_paths = [torch.from_numpy(_).to(device) for _ in zz_paths] * depth
+        zz_paths_rev = [torch.from_numpy(_).to(device) for _ in zz_paths_rev] * depth
+        time_p = torch.from_numpy(np.arange(video_frames)).to(device)
+        time_n = torch.from_numpy(np.arange(video_frames - 1, -1, -1)).to(device)
+        time_zz_paths = [time_p, time_n] * depth
+        time_zz_paths_reverse = [time_n, time_p] * depth
+        block_kwargs["zigzag_paths"] = []
+        block_kwargs["zigzag_paths_reverse"] = []
+        for _d in range(depth):
+            if st_order[_d] == "s":
+                block_kwargs["zigzag_paths"].append(zz_paths.pop(0))
+                block_kwargs["zigzag_paths_reverse"].append(zz_paths_rev.pop(0))
+            elif st_order[_d] == "t":
+                block_kwargs["zigzag_paths"].append(time_zz_paths.pop(0))
+                block_kwargs["zigzag_paths_reverse"].append(time_zz_paths_reverse.pop(0))
+            else:
+                raise ValueError("st_order should be s or t")
+        block_kwargs["extras"] = extras
+        block_kwargs["video_frames"] = video_frames
+        block_kwargs["st_order"] = st_order
+        return block_kwargs
+
+    if scan_type == "v2":
+        return block_kwargs
+
+    raise ValueError("scan_type doesn't match")
+
+
+class HierarchicalContextStage(nn.Module):
+    """Run local ZigMa blocks inside windows, then compress each window into one context."""
+
+    def __init__(
+        self,
+        dim,
+        stage_idx,
+        stage_depth,
+        input_hw,
+        window_size,
+        stride,
+        context_compress_type,
+        has_text,
+        ssm_cfg,
+        norm_epsilon,
+        rms_norm,
+        residual_in_fp32,
+        fused_add_norm,
+        drop_path_values,
+        scan_type,
+        use_jit,
+        use_checkpoint,
+        device,
+        dtype,
+    ):
+        super().__init__()
+        self.stage_idx = stage_idx
+        self.dim = dim
+        self.window_size = window_size
+        self.stride = stride
+        self.context_compress_type = context_compress_type
+        self.input_hw = input_hw
+        self.residual_in_fp32 = residual_in_fp32
+        self.fused_add_norm = fused_add_norm
+        self.use_checkpoint = use_checkpoint
+        self.output_hw = (
+            compute_window_grid_size(input_hw[0], window_size, stride)[0],
+            compute_window_grid_size(input_hw[1], window_size, stride)[0],
+        )
+        self.pad_hw = (
+            compute_window_grid_size(input_hw[0], window_size, stride)[1],
+            compute_window_grid_size(input_hw[1], window_size, stride)[1],
+        )
+        factory_kwargs = {"device": device, "dtype": dtype}
+        block_kwargs = {"use_jit": use_jit}
+        if scan_type != "v2":
+            block_kwargs.update(
+                build_scan_block_kwargs(
+                    scan_type=scan_type,
+                    patch_side_len=window_size,
+                    depth=stage_depth,
+                    device=device,
+                    extras=0,
+                )
+            )
+        self.blocks = nn.ModuleList(
+            [
+                create_block(
+                    dim,
+                    has_text=has_text,
+                    ssm_cfg=ssm_cfg,
+                    norm_epsilon=norm_epsilon,
+                    rms_norm=rms_norm,
+                    residual_in_fp32=residual_in_fp32,
+                    fused_add_norm=fused_add_norm,
+                    layer_idx=layer_idx,
+                    scan_type=scan_type,
+                    drop_path=drop_path_values[layer_idx],
+                    **block_kwargs,
+                    **factory_kwargs,
+                )
+                .to(device)
+                .to(dtype)
+                for layer_idx in range(stage_depth)
+            ]
+        )
+        self.stage_norm = (nn.LayerNorm if not rms_norm else RMSNorm)(
+            dim, eps=norm_epsilon, **factory_kwargs
+        )
+        self.residual_proj = nn.Identity()
+        self.output_proj = nn.Linear(dim, dim, **factory_kwargs)
+
+    def _extract_windows(self, context_map):
+        b, h, w, c = context_map.shape
+        pad_h, pad_w = self.pad_hw
+        x = context_map.permute(0, 3, 1, 2)
+        if pad_h > 0 or pad_w > 0:
+            x = F.pad(x, (0, pad_w, 0, pad_h))
+        x = x.unfold(2, self.window_size, self.stride).unfold(
+            3, self.window_size, self.stride
+        )
+        x = x.permute(0, 2, 3, 4, 5, 1).contiguous()
+        out_h, out_w = x.shape[1], x.shape[2]
+        windows = x.reshape(b * out_h * out_w, self.window_size * self.window_size, c)
+        return windows, (out_h, out_w)
+
+    def forward(self, context_map, c, text=None):
+        windows, out_hw = self._extract_windows(context_map)
+        residual = None
+        hidden_states = windows
+        repeated_c = c.repeat_interleave(out_hw[0] * out_hw[1], dim=0)
+        repeated_text = (
+            text.repeat_interleave(out_hw[0] * out_hw[1], dim=0)
+            if text is not None
+            else None
+        )
+        for block in self.blocks:
+            if self.use_checkpoint:
+                hidden_states, residual = torch.utils.checkpoint.checkpoint(
+                    block, hidden_states, residual, repeated_c, repeated_text
+                )
+            else:
+                hidden_states, residual = block(
+                    hidden_states,
+                    residual=residual,
+                    c=repeated_c,
+                    text=repeated_text,
+                )
+
+        if not self.fused_add_norm:
+            if residual is None:
+                residual = hidden_states
+            else:
+                residual = residual + hidden_states
+            stage_hidden = self.stage_norm(
+                residual.to(dtype=self.stage_norm.weight.dtype)
+            )
+        else:
+            fused_add_norm_fn = (
+                rms_norm_fn
+                if isinstance(self.stage_norm, RMSNorm)
+                else layer_norm_fn
+            )
+            stage_hidden = fused_add_norm_fn(
+                hidden_states,
+                self.stage_norm.weight,
+                self.stage_norm.bias,
+                eps=self.stage_norm.eps,
+                residual=residual,
+                prenorm=False,
+                residual_in_fp32=self.residual_in_fp32,
+            )
+        compressed_update = pool_tokens(stage_hidden, self.context_compress_type)
+        compressed_input = pool_tokens(windows, self.context_compress_type)
+        stage_output = self.residual_proj(compressed_input) + self.output_proj(
+            compressed_update
+        )
+        stage_output = stage_output.reshape(
+            context_map.shape[0], out_hw[0], out_hw[1], self.dim
+        )
+        stats = {
+            "stage_idx": self.stage_idx,
+            "input_resolution": self.input_hw,
+            "output_resolution": out_hw,
+            "context_count": int(out_hw[0] * out_hw[1]),
+            "update_norm": compressed_update.norm(dim=-1).mean().detach(),
+            "input_norm": compressed_input.norm(dim=-1).mean().detach(),
+            "output_norm": stage_output.reshape(stage_output.shape[0], -1, self.dim)
+            .norm(dim=-1)
+            .mean()
+            .detach(),
+        }
+        return stage_output, stats
+
+
 def _init_weights(
     module,
     n_layer,
@@ -573,6 +885,15 @@ class ZigMa(nn.Module):
         m_init=True,
         use_checkpoint=False,
         dtype=torch.float32,
+        hierarchical_context=False,
+        hierarchy_window_size=4,
+        hierarchy_stride=4,
+        context_compress_type="mean",
+        hierarchy_max_stages=None,
+        hierarchy_stage_depths=None,
+        hierarchy_stage_depth=None,
+        hierarchy_allow_partial=False,
+        hierarchical_output_mode="context",
     ):
         # assert num_classes == -1, "num_classes should be -1"
         # assert n_context_token == 0, "n_context_token should be 0"
@@ -584,6 +905,7 @@ class ZigMa(nn.Module):
         self.patch_size = patch_size
         self.embed_dim = embed_dim
         self.tpe = tpe
+        self.scan_type = scan_type
 
         self.residual_in_fp32 = residual_in_fp32
         self.fused_add_norm = fused_add_norm
@@ -591,6 +913,16 @@ class ZigMa(nn.Module):
         self.use_pe = use_pe
         num_patches = (img_dim // patch_size) ** 2
         self.use_checkpoint = use_checkpoint
+        self.hierarchical_context = hierarchical_context
+        self.hierarchy_window_size = hierarchy_window_size
+        self.hierarchy_stride = hierarchy_stride
+        self.context_compress_type = context_compress_type
+        self.hierarchy_max_stages = hierarchy_max_stages
+        self.hierarchy_stage_depths_cfg = hierarchy_stage_depths
+        self.hierarchy_stage_depth = hierarchy_stage_depth
+        self.hierarchy_allow_partial = hierarchy_allow_partial
+        self.hierarchical_output_mode = hierarchical_output_mode
+        self.latest_hierarchy_stats = {}
         print(
             "use_checkpoint",
             use_checkpoint,
@@ -602,6 +934,22 @@ class ZigMa(nn.Module):
             num_patches,
             "use_jit",
             use_jit,
+        )
+        print(
+            "hierarchical_context",
+            hierarchical_context,
+            "hierarchy_window_size",
+            hierarchy_window_size,
+            "hierarchy_stride",
+            hierarchy_stride,
+            "context_compress_type",
+            context_compress_type,
+            "hierarchy_allow_partial",
+            hierarchy_allow_partial,
+            "hierarchical_output_mode",
+            hierarchical_output_mode,
+            "hierarchy_stage_depth",
+            hierarchy_stage_depth,
         )
 
         if video_frames == 0:
@@ -687,138 +1035,178 @@ class ZigMa(nn.Module):
         block_kwargs = {"use_jit": use_jit}
         print("scan_type", scan_type)
         patch_side_len = int(math.sqrt(num_patches))
-        if (
-            scan_type.startswith("zigzagN")
-            or scan_type.startswith("hilbertN")
-            or scan_type.startswith("randomN")
-            or scan_type.startswith("parallelN")
-        ):
-            if scan_type.startswith("zigzagN") or scan_type.startswith("parallelN"):
-                _zz_paths = zigzag_path(N=patch_side_len)
-                if scan_type.startswith("zigzagN"):
-                    zigzag_num = int(scan_type.replace("zigzagN", ""))
-                    zz_paths = _zz_paths[:zigzag_num]
-                    assert (
-                        len(zz_paths) == zigzag_num
-                    ), f"{len(zz_paths)} != {zigzag_num}"
-                elif scan_type.startswith("parallelN"):
-                    zz_paths = _zz_paths[:8]
-
-                else:
-                    raise ValueError("scan_type should be xx")
-            elif scan_type.startswith("hilbertN"):
-                _zz_paths = hilbert_path(N=patch_side_len)
-                if scan_type.startswith("hilbertN"):
-                    zigzag_num = int(scan_type.replace("hilbertN", ""))
-                    zz_paths = _zz_paths[:zigzag_num]
-                    assert (
-                        len(zz_paths) == zigzag_num
-                    ), f"{len(zz_paths)} != {zigzag_num}"
-                else:
-                    raise ValueError("scan_type should be xx")
-            elif scan_type.startswith("randomN"):
-                zigzag_num = int(scan_type.replace("randomN", ""))
-                zz_paths = []
-                for _ddd in range(zigzag_num):
-                    _tmp = np.array([_ for _ in range(patch_side_len**2)])
-                    np.random.shuffle(_tmp)
-                    print(_tmp)
-                    zz_paths.append(_tmp)
-
-            else:
-                raise ValueError(f"scan_type {scan_type} doenst match")
-            print("zigzag_num", len(zz_paths))
-            #############
-            zz_paths_rev = [reverse_permut_np(_) for _ in zz_paths]
-            zz_paths = zz_paths * depth
-            zz_paths_rev = zz_paths_rev * depth
-            zz_paths = [torch.from_numpy(_).to(device) for _ in zz_paths]
-            zz_paths_rev = [torch.from_numpy(_).to(device) for _ in zz_paths_rev]
-            assert len(zz_paths) == len(
-                zz_paths_rev
-            ), f"{len(zz_paths)} != {len(zz_paths_rev)}"
-            block_kwargs["zigzag_paths"] = zz_paths
-            block_kwargs["zigzag_paths_reverse"] = zz_paths_rev
-            block_kwargs["extras"] = self.extras
-            print("zigzag_paths length", len(zz_paths))
-            for iii, _ in enumerate(zz_paths):
-                print(f"zigzag_paths {iii}", _[:20])
-        elif scan_type.startswith("zzvideo_"):
-            st_order = list(
-                scan_type.replace("zzvideo_", "")
-            )  # if st, then ststst; if sst then sstsstsstsst
-            assert len(set(st_order)) == 2
-            st_order = st_order * depth
-            print("st_order", st_order)
-
-            zz_paths = zigzag_path(N=patch_side_len)
-            zz_paths_rev = [reverse_permut_np(_) for _ in zz_paths]
-            ####
-            zz_paths = [torch.from_numpy(_).to(device) for _ in zz_paths]
-            zz_paths_rev = [torch.from_numpy(_).to(device) for _ in zz_paths_rev]
-            zz_paths = zz_paths * depth
-            zz_paths_rev = zz_paths_rev * depth
-            assert len(zz_paths) == len(
-                zz_paths_rev
-            ), f"{len(zz_paths)} != {len(zz_paths_rev)}"
-
-            time_p = torch.from_numpy(np.array([_ for _ in range(video_frames)])).to(
-                device
+        if self.hierarchical_context and self.video_frames > 0:
+            raise NotImplementedError(
+                "hierarchical_context currently supports image inputs only"
             )
-            time_n = torch.from_numpy(
-                np.array([video_frames - 1 - _ for _ in range(video_frames)])
-            ).to(device)
-            time_zz_paths = [time_p, time_n] * depth
-            time_zz_paths_reverse = [time_n, time_p] * depth
-            block_kwargs["zigzag_paths"] = []
-            block_kwargs["zigzag_paths_reverse"] = []
-            for _d in range(depth):
-                if st_order[_d] == "s":
-                    block_kwargs["zigzag_paths"].append(zz_paths.pop(0))
-                    block_kwargs["zigzag_paths_reverse"].append(zz_paths_rev.pop(0))
-                elif st_order[_d] == "t":
-                    block_kwargs["zigzag_paths"].append(time_zz_paths.pop(0))
-                    block_kwargs["zigzag_paths_reverse"].append(
-                        time_zz_paths_reverse.pop(0)
+        if hierarchical_output_mode not in {"context", "prediction"}:
+            raise ValueError(
+                "hierarchical_output_mode must be 'context' or 'prediction', "
+                f"got {hierarchical_output_mode}"
+            )
+        if context_compress_type not in {"last", "mean"}:
+            raise ValueError(
+                f"context_compress_type must be 'last' or 'mean', got {context_compress_type}"
+            )
+
+        self.hierarchy_stage_layout = []
+        self.hierarchy_input_size = (patch_side_len, patch_side_len)
+        if self.hierarchical_context:
+            self.blocks = None
+            cur_h, cur_w = self.hierarchy_input_size
+            while True:
+                out_h, _ = compute_window_grid_size(
+                    cur_h, self.hierarchy_window_size, self.hierarchy_stride
+                )
+                out_w, _ = compute_window_grid_size(
+                    cur_w, self.hierarchy_window_size, self.hierarchy_stride
+                )
+                self.hierarchy_stage_layout.append(
+                    {
+                        "input_resolution": (cur_h, cur_w),
+                        "output_resolution": (out_h, out_w),
+                    }
+                )
+                if out_h == 1 and out_w == 1:
+                    break
+                if self.hierarchy_max_stages is not None and len(
+                    self.hierarchy_stage_layout
+                ) >= self.hierarchy_max_stages:
+                    break
+                cur_h, cur_w = out_h, out_w
+
+            if len(self.hierarchy_stage_layout) == 0:
+                raise ValueError("hierarchical_context produced zero stages")
+            self.hierarchy_final_resolution = self.hierarchy_stage_layout[-1][
+                "output_resolution"
+            ]
+            self.hierarchy_reaches_global_context = self.hierarchy_final_resolution == (
+                1,
+                1,
+            )
+            if not self.hierarchy_allow_partial and not self.hierarchy_reaches_global_context:
+                raise ValueError(
+                    "Pure bottom-up hierarchy must reach a single global context. "
+                    f"Got final resolution {self.hierarchy_final_resolution}. "
+                    "Increase stages, adjust window/stride, or set "
+                    "hierarchy_allow_partial=True explicitly."
+                )
+
+            num_stages = len(self.hierarchy_stage_layout)
+            if hierarchy_stage_depth is not None:
+                if hierarchy_stage_depth <= 0:
+                    raise ValueError(
+                        f"hierarchy_stage_depth must be positive, got {hierarchy_stage_depth}"
                     )
-                else:
-                    raise ValueError("st_order should be s or t")
+                hierarchy_stage_depths = [hierarchy_stage_depth] * num_stages
+            elif hierarchy_stage_depths is None:
+                base = depth // num_stages
+                rem = depth % num_stages
+                hierarchy_stage_depths = [
+                    base + (1 if idx < rem else 0) for idx in range(num_stages)
+                ]
+            else:
+                hierarchy_stage_depths = list(hierarchy_stage_depths)
+                assert len(hierarchy_stage_depths) == num_stages, (
+                    f"Expected {num_stages} hierarchy stage depths, got "
+                    f"{len(hierarchy_stage_depths)}"
+                )
+            if any(_d <= 0 for _d in hierarchy_stage_depths):
+                raise ValueError(
+                    f"All hierarchy_stage_depths must be positive, got {hierarchy_stage_depths}"
+                )
+            self.hierarchy_stage_depths = hierarchy_stage_depths
+            self.n_layer = sum(self.hierarchy_stage_depths)
 
-            block_kwargs["extras"] = self.extras
-            block_kwargs["video_frames"] = video_frames
-            block_kwargs["st_order"] = st_order
-            print("zigzag_paths length", len(zz_paths))
-        elif scan_type == "v2":
-            pass  # no zigzag
-        else:
-            raise ValueError("scan_type doesn't match")
-
-        self.blocks = nn.ModuleList(
-            [
-                create_block(
-                    embed_dim,
-                    has_text=has_text,
-                    ssm_cfg=ssm_cfg,
-                    norm_epsilon=norm_epsilon,
-                    rms_norm=rms_norm,
-                    residual_in_fp32=residual_in_fp32,
-                    fused_add_norm=fused_add_norm,
-                    layer_idx=i,
-                    scan_type=scan_type,
-                    drop_path=inter_dpr[i],
-                    **block_kwargs,
-                    **factory_kwargs,
+            dpr = [
+                x.item() for x in torch.linspace(0, drop_path_rate, self.n_layer)
+            ]
+            dpr_cursor = 0
+            self.hierarchy_stages = nn.ModuleList()
+            for stage_idx, stage_layout in enumerate(self.hierarchy_stage_layout):
+                stage_depth = self.hierarchy_stage_depths[stage_idx]
+                stage_drop_path = dpr[dpr_cursor : dpr_cursor + stage_depth]
+                dpr_cursor += stage_depth
+                self.hierarchy_stages.append(
+                    HierarchicalContextStage(
+                        dim=embed_dim,
+                        stage_idx=stage_idx,
+                        stage_depth=stage_depth,
+                        input_hw=stage_layout["input_resolution"],
+                        window_size=self.hierarchy_window_size,
+                        stride=self.hierarchy_stride,
+                        context_compress_type=self.context_compress_type,
+                        has_text=has_text,
+                        ssm_cfg=ssm_cfg,
+                        norm_epsilon=norm_epsilon,
+                        rms_norm=rms_norm,
+                        residual_in_fp32=residual_in_fp32,
+                        fused_add_norm=fused_add_norm,
+                        drop_path_values=stage_drop_path,
+                        scan_type=scan_type,
+                        use_jit=use_jit,
+                        use_checkpoint=use_checkpoint,
+                        device=device,
+                        dtype=dtype,
+                    )
+                )
+            self.hierarchy_output_tokens = num_patches_4pe
+            self.hierarchy_final_layer = (
+                HierarchicalFinalLayer(
+                    self.embed_dim,
+                    output_tokens=self.hierarchy_output_tokens,
+                    patch_size=patch_size,
+                    out_channels=self.out_channels,
                 )
                 .to(device)
                 .to(dtype)
-                for i in range(self.n_layer)
-            ]
-        )
-        self.final_layer = (
-            FinalLayer(self.embed_dim, patch_size, self.out_channels)
-            .to(device)
-            .to(dtype)
-        )
+            )
+            print("hierarchy_stage_layout", self.hierarchy_stage_layout)
+            print("hierarchy_stage_depths", self.hierarchy_stage_depths)
+            print("hierarchy_final_resolution", self.hierarchy_final_resolution)
+        else:
+            block_kwargs.update(
+                build_scan_block_kwargs(
+                    scan_type=scan_type,
+                    patch_side_len=patch_side_len,
+                    depth=depth,
+                    device=device,
+                    extras=self.extras,
+                    video_frames=video_frames,
+                )
+            )
+            self.blocks = nn.ModuleList(
+                [
+                    create_block(
+                        embed_dim,
+                        has_text=has_text,
+                        ssm_cfg=ssm_cfg,
+                        norm_epsilon=norm_epsilon,
+                        rms_norm=rms_norm,
+                        residual_in_fp32=residual_in_fp32,
+                        fused_add_norm=fused_add_norm,
+                        layer_idx=i,
+                        scan_type=scan_type,
+                        drop_path=inter_dpr[i],
+                        **block_kwargs,
+                        **factory_kwargs,
+                    )
+                    .to(device)
+                    .to(dtype)
+                    for i in range(self.n_layer)
+                ]
+            )
+            self.hierarchy_stages = None
+            self.hierarchy_final_layer = None
+            self.hierarchy_final_resolution = self.hierarchy_input_size
+            self.hierarchy_reaches_global_context = False
+        self.final_layer = None
+        if not self.hierarchical_context:
+            self.final_layer = (
+                FinalLayer(self.embed_dim, patch_size, self.out_channels)
+                .to(device)
+                .to(dtype)
+            )
 
         # output head
         self.norm_f = (nn.LayerNorm if not rms_norm else RMSNorm)(
@@ -831,7 +1219,7 @@ class ZigMa(nn.Module):
             self.apply(
                 partial(
                     _init_weights,
-                    n_layer=depth,
+                    n_layer=self.n_layer,
                     **(initializer_cfg if initializer_cfg is not None else {}),
                 )
             )
@@ -860,16 +1248,23 @@ class ZigMa(nn.Module):
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
         # Zero-out adaLN modulation layers in DiT blocks:
-        for block in self.blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+        if self.blocks is not None:
+            for block in self.blocks:
+                nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
+                nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+        elif self.hierarchy_stages is not None:
+            for stage in self.hierarchy_stages:
+                for block in stage.blocks:
+                    nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
+                    nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
-        # Zero-out output layers:
-        try:
-            nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
-        except:
-            pass
+        # Zero-out output layers when they expose adaLN modulation.
+        if self.final_layer is not None:
+            try:
+                nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
+                nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
+            except:
+                pass
 
     def unpatchify(self, x):
         """
@@ -908,66 +1303,167 @@ class ZigMa(nn.Module):
 
         return ckpt_forward
 
-    def forward(
+    def _run_hierarchy(self, hidden_states, c, text=None):
+        initial_map = tokens_to_map(hidden_states, self.hierarchy_input_size)
+        stage_stats = []
+        current_map = initial_map
+
+        for stage in self.hierarchy_stages:
+            current_map, stats = stage(current_map, c=c, text=text)
+            stage_stats.append(stats)
+        final_resolution = current_map.shape[1:3]
+        reached_global_context = final_resolution == (1, 1)
+        if not self.hierarchy_allow_partial and not reached_global_context:
+            raise AssertionError(
+                "Pure bottom-up hierarchy did not reach a single global context. "
+                f"Got final resolution {final_resolution}."
+            )
+        hidden_states = map_to_tokens(current_map)
+        self.latest_hierarchy_stats = {
+            "enabled": True,
+            "bottom_up_only": True,
+            "num_stages": len(stage_stats),
+            "final_h": int(final_resolution[0]),
+            "final_w": int(final_resolution[1]),
+            "reached_global_context": reached_global_context,
+            "stage_resolutions": [
+                {
+                    "input": stats["input_resolution"],
+                    "output": stats["output_resolution"],
+                    "context_count": stats["context_count"],
+                }
+                for stats in stage_stats
+            ],
+            "stage_metrics": stage_stats,
+        }
+        return hidden_states
+
+    def get_hierarchy_logging_metrics(self):
+        if not self.hierarchical_context:
+            return {
+                "hierarchy/enabled": 0.0,
+            }
+        metrics = {
+            "hierarchy/enabled": 1.0,
+            "hierarchy/bottom_up_only": 1.0,
+            "hierarchy/window_size": float(self.hierarchy_window_size),
+            "hierarchy/stride": float(self.hierarchy_stride),
+            "hierarchy/num_stages": float(
+                self.latest_hierarchy_stats.get(
+                    "num_stages", len(self.hierarchy_stage_layout)
+                )
+            ),
+            "hierarchy/compress_is_last": float(self.context_compress_type == "last"),
+            "hierarchy/compress_is_mean": float(self.context_compress_type == "mean"),
+            "hierarchy/final_h": float(
+                self.latest_hierarchy_stats.get(
+                    "final_h", self.hierarchy_final_resolution[0]
+                )
+            ),
+            "hierarchy/final_w": float(
+                self.latest_hierarchy_stats.get(
+                    "final_w", self.hierarchy_final_resolution[1]
+                )
+            ),
+            "hierarchy/reached_global_context": float(
+                self.latest_hierarchy_stats.get(
+                    "reached_global_context", self.hierarchy_reaches_global_context
+                )
+            ),
+            "hierarchy/allow_partial": float(self.hierarchy_allow_partial),
+            "hierarchy/output_is_context": float(
+                self.hierarchical_output_mode == "context"
+            ),
+            "hierarchy/output_is_prediction": float(
+                self.hierarchical_output_mode == "prediction"
+            ),
+            "hierarchy/stage_depth_uniform": float(
+                self.hierarchy_stage_depth if self.hierarchy_stage_depth is not None else 0
+            ),
+        }
+        stage_metrics = self.latest_hierarchy_stats.get("stage_metrics", [])
+        for stats in stage_metrics:
+            stage_idx = stats["stage_idx"]
+            metrics[f"hierarchy/stage_{stage_idx}_input_h"] = float(
+                stats["input_resolution"][0]
+            )
+            metrics[f"hierarchy/stage_{stage_idx}_input_w"] = float(
+                stats["input_resolution"][1]
+            )
+            metrics[f"hierarchy/stage_{stage_idx}_output_h"] = float(
+                stats["output_resolution"][0]
+            )
+            metrics[f"hierarchy/stage_{stage_idx}_output_w"] = float(
+                stats["output_resolution"][1]
+            )
+            metrics[f"hierarchy/stage_{stage_idx}_context_count"] = float(
+                stats["context_count"]
+            )
+            metrics[f"hierarchy/stage_{stage_idx}_input_norm"] = float(stats["input_norm"])
+            metrics[f"hierarchy/stage_{stage_idx}_update_norm"] = float(
+                stats["update_norm"]
+            )
+            metrics[f"hierarchy/stage_{stage_idx}_output_norm"] = float(
+                stats["output_norm"]
+            )
+        return metrics
+
+    def forward_backbone(
         self,
         hidden_states,
         t,
         y=None,
     ):
-        """
-        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images),
-
-        t: (N,) tensor of diffusion timesteps
-        y: (N,) tensor of class labels
-        """
-        hidden_states = self.x_embedder(
-            hidden_states
-        )  # (N, T, D), where T = H * W / patch_size ** 2, if video_frames>0, T = H * W * video_frames / patch_size ** 2
+        """Return backbone features before any downstream prediction head."""
+        hidden_states = self.x_embedder(hidden_states)
         _B, _T, _D = hidden_states.shape
 
         t = (t * 1000.0).to(hidden_states)
-        t = self.t_embedder(t)  # (N, D)
+        t = self.t_embedder(t)
         if self.has_text:
-            # y = self.y_embedder(y, self.training)  # (B, N, D)
-            y = self.y_embedder(y)  # (B, N, D)
-            c = t + y.mean(dim=1)  # (N, D)
+            y = self.y_embedder(y)
+            c = t + y.mean(dim=1)
         elif self.num_classes > 0:
-            c = t + self.y_embedder(y, self.training)  # (N, D)
+            c = t + self.y_embedder(y, self.training)
         else:
             c = t
 
         if self.use_pe == 1 or self.use_pe == 2:
             hidden_states = hidden_states + self.pos_embed
         if self.video_frames > 0 and self.tpe:
-            # temporal pos
             hidden_states = rearrange(
                 hidden_states, "b (t l) c -> (b l) t c", t=self.video_frames
             )
             hidden_states = hidden_states + self.temporal_pos_embedding
             hidden_states = rearrange(hidden_states, "(b l) t c -> b (t l) c", b=_B)
 
-        residual = None
-        for layer_idx, block in enumerate(self.blocks):
-            if self.use_pe == 3:
-                hidden_states = hidden_states + self.pos_embed_list[layer_idx]
-            if self.use_checkpoint:
-                hidden_states, residual = torch.utils.checkpoint.checkpoint(
-                    self.ckpt_wrapper(block), hidden_states, residual, c, y
+        if self.hierarchical_context:
+            hidden_states = self._run_hierarchy(hidden_states, c=c, text=y)
+        else:
+            residual = None
+            for layer_idx, block in enumerate(self.blocks):
+                if self.use_pe == 3:
+                    hidden_states = hidden_states + self.pos_embed_list[layer_idx]
+                if self.use_checkpoint:
+                    hidden_states, residual = torch.utils.checkpoint.checkpoint(
+                        self.ckpt_wrapper(block), hidden_states, residual, c, y
+                    )
+                else:
+                    hidden_states, residual = block(
+                        hidden_states, residual=residual, c=c, text=y
+                    )
+
+        if not self.fused_add_norm:
+            if self.hierarchical_context:
+                hidden_states = self.norm_f(
+                    hidden_states.to(dtype=self.norm_f.weight.dtype)
                 )
             else:
-                hidden_states, residual = block(
-                    hidden_states, residual=residual, c=c, text=y
-                )  # (N, T, D)
-
-        ##### finished the Mamba blocks, here we apply the last Normalization layer
-        if not self.fused_add_norm:
-            if residual is None:
                 residual = hidden_states
-            else:
-                residual = residual + self.drop_path(hidden_states)
-            hidden_states = self.norm_f(residual.to(dtype=self.norm_f.weight.dtype))
+                hidden_states = self.norm_f(
+                    residual.to(dtype=self.norm_f.weight.dtype)
+                )
         else:
-            # Set prenorm=False here since we don't need the residual
             fused_add_norm_fn = (
                 rms_norm_fn if isinstance(self.norm_f, RMSNorm) else layer_norm_fn
             )
@@ -976,18 +1472,54 @@ class ZigMa(nn.Module):
                 self.norm_f.weight,
                 self.norm_f.bias,
                 eps=self.norm_f.eps,
-                residual=residual,
+                residual=None if self.hierarchical_context else residual,
                 prenorm=False,
                 residual_in_fp32=self.residual_in_fp32,
             )
 
-        hidden_states = self.final_layer(hidden_states)
+        if self.hierarchical_context and hidden_states.shape[1] != 1:
+            raise AssertionError(
+                "Pure bottom-up hierarchy must produce exactly one final context token, "
+                f"got {hidden_states.shape[1]}"
+            )
+        return hidden_states
+
+    def forward_prediction_head(self, backbone_output):
+        """Apply the downstream prediction head to backbone features."""
+        if self.hierarchical_context:
+            hidden_states = self.hierarchy_final_layer(backbone_output)
+        else:
+            hidden_states = self.final_layer(backbone_output)
         if self.video_frames > 0:
             hidden_states = self.unpatchify_video(hidden_states, self.video_frames)
         else:
             hidden_states = self.unpatchify(hidden_states)
-
         return hidden_states
+
+    def forward_transport(
+        self,
+        hidden_states,
+        t,
+        y=None,
+    ):
+        """Compatibility path for diffusion training/sampling that expects prediction tensors."""
+        backbone_output = self.forward_backbone(hidden_states, t, y=y)
+        return self.forward_prediction_head(backbone_output)
+
+    def forward(
+        self,
+        hidden_states,
+        t,
+        y=None,
+    ):
+        """
+        In hierarchical mode, `context` output returns the pure backbone result [B, 1, C].
+        `prediction` applies the downstream diffusion head.
+        """
+        backbone_output = self.forward_backbone(hidden_states, t, y=y)
+        if self.hierarchical_context and self.hierarchical_output_mode == "context":
+            return backbone_output
+        return self.forward_prediction_head(backbone_output)
 
     def forward_with_cfg(self, x, t, y, cfg_scale):
         raise NotImplementedError

@@ -66,6 +66,27 @@ def main(args):
     model, in_channels, input_size = get_model(args, device)
     if rank == 0:
         print(f"in_channels={in_channels}, input_size={input_size}")
+        if hasattr(model, "hierarchy_stage_layout"):
+            print(
+                "hierarchical_context=",
+                getattr(model, "hierarchical_context", False),
+                "window=",
+                getattr(model, "hierarchy_window_size", None),
+                "stride=",
+                getattr(model, "hierarchy_stride", None),
+                "compress=",
+                getattr(model, "context_compress_type", None),
+                "stage_depth=",
+                getattr(model, "hierarchy_stage_depth", None),
+                "allow_partial=",
+                getattr(model, "hierarchy_allow_partial", None),
+                "output_mode=",
+                getattr(model, "hierarchical_output_mode", None),
+                "final_resolution=",
+                getattr(model, "hierarchy_final_resolution", None),
+                "stage_layout=",
+                getattr(model, "hierarchy_stage_layout", None),
+            )
 
     if True:
         state_dict = torch.load(args.ckpt, map_location=lambda storage, loc: storage)
@@ -355,7 +376,7 @@ def main(args):
             y = None
 
         model_kwargs = dict(y=y)
-        model_fn = model.forward
+        model_fn = getattr(model, "forward_transport", model.forward)
         gts, _y = next(data_generator)
 
         with torch.no_grad():

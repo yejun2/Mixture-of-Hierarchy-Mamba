@@ -1,0 +1,36 @@
+name: hierarchy_hybrid_local_v2_m
+target: model_hierarchy_hybrid.HierarchicalMambaHybrid
+params:
+    img_dim: 32
+    in_channels: 4
+    out_channels: 4
+    patch_size: 1
+    embed_dim: 256
+    scan_type: v2
+    use_pe: 2
+    hierarchy_window_size: 2
+    hierarchy_stride: 2
+    first_layer_stride: 2
+    hierarchy_stage_depth: 3
+    hierarchy_max_stages: null
+    hierarchy_allow_partial: false
+    context_compress_type: mean
+    share_stage_processor: false
+    hierarchical_output_mode: prediction
+    use_multiscale_fusion_head: true
+    fusion_mode: concat
+    fusion_selected_stages: "32,16,8"
+    fusion_anchor_resolution: 4
+    decoder_anchor_resolution: 8
+    fusion_stage_dim: 384
+    fusion_gate_type: stage_timestep
+    fusion_pos_embed_type: anchor_shared
+    fusion_block_depth: 3
+    fusion_stage_depth_overrides: "16:1"
+    fusion_channel_gate_stages: "8"
+    anchor_builder_depth: 4
+    fusion_prediction_head_type: anchor_conv_upsample
+    fusion_logging_verbose: true
+    highres_stage_depth: 4
+    bottleneck_stage_depth: 3
+    downsample_use_premix: true

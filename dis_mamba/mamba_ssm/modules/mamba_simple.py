@@ -168,6 +168,7 @@ class Mamba(nn.Module):
             or scan_type.startswith("hilbertN")
             or scan_type.startswith("randomN")
             or scan_type.startswith("parallelN")
+            or scan_type == "fixed2x2"
         ), f"Invalid scan_type: {scan_type}"
 
         if scan_type.startswith("parallelN"):
@@ -357,6 +358,7 @@ class Mamba(nn.Module):
                 self.scan_type.startswith("zigzagN")
                 or self.scan_type.startswith("hilbertN")
                 or self.scan_type.startswith("randomN")
+                or self.scan_type == "fixed2x2"
             ):
                 #### rearrange
                 _perm = self.zigzag_paths[self.layer_idx]

@@ -123,6 +123,12 @@ class Transport:
         t = t.to(x1)
         return t, x0, x1
 
+    @staticmethod
+    def _call_model(model, x, t, model_kwargs):
+        if hasattr(model, "forward_transport"):
+            return model.forward_transport(x, t, **model_kwargs)
+        return model(x, t, **model_kwargs)
+
     def training_losses(self, model, x1, model_kwargs=None):
         """Loss for training the score model
         Args:
@@ -135,7 +141,7 @@ class Transport:
 
         t, x0, x1 = self.sample(x1)
         t, xt, ut = self.path_sampler.plan(t, x0, x1)
-        model_output = model(xt, t, **model_kwargs)
+        model_output = self._call_model(model, xt, t, model_kwargs)
         B, *_, C = xt.shape
         assert model_output.size() == (
             B,
@@ -177,18 +183,18 @@ class Transport:
 
         def score_ode(x, t, model, **model_kwargs):
             drift_mean, drift_var = self.path_sampler.compute_drift(x, t)
-            model_output = model(x, t, **model_kwargs)
+            model_output = self._call_model(model, x, t, model_kwargs)
             return -drift_mean + drift_var * model_output  # by change of variable
 
         def noise_ode(x, t, model, **model_kwargs):
             drift_mean, drift_var = self.path_sampler.compute_drift(x, t)
             sigma_t, _ = self.path_sampler.compute_sigma_t(path.expand_t_like_x(t, x))
-            model_output = model(x, t, **model_kwargs)
+            model_output = self._call_model(model, x, t, model_kwargs)
             score = model_output / -sigma_t
             return -drift_mean + drift_var * score
 
         def velocity_ode(x, t, model, **model_kwargs):
-            model_output = model(x, t, **model_kwargs)
+            model_output = self._call_model(model, x, t, model_kwargs)
             return model_output
 
         if self.model_type == ModelType.NOISE:
@@ -216,15 +222,17 @@ class Transport:
         x_t = alpha_t * x + sigma_t * eps"""
         if self.model_type == ModelType.NOISE:
             score_fn = (
-                lambda x, t, model, **kwargs: model(x, t, **kwargs)
+                lambda x, t, model, **kwargs: self._call_model(model, x, t, kwargs)
                 / -self.path_sampler.compute_sigma_t(path.expand_t_like_x(t, x))[0]
             )
         elif self.model_type == ModelType.SCORE:
-            score_fn = lambda x, t, model, **kwagrs: model(x, t, **kwagrs)
+            score_fn = (
+                lambda x, t, model, **kwagrs: self._call_model(model, x, t, kwagrs)
+            )
         elif self.model_type == ModelType.VELOCITY:
             score_fn = (
                 lambda x, t, model, **kwargs: self.path_sampler.get_score_from_velocity(
-                    model(x, t, **kwargs), x, t
+                    self._call_model(model, x, t, kwargs), x, t
                 )
             )
         else:

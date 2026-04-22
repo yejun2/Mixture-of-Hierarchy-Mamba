@@ -85,7 +85,7 @@ class WebDataModuleFromConfig(pl.LightningDataModule):
         )
         self.is_video = is_video
 
-    def make_loader(self, dataset_config, train=True):
+    def make_loader(self, dataset_config, train=True, include_images=True):
         # change range from [0,1] to [-1,1] and put channel last or first
         image_transforms = []
         if self.channel_last:
@@ -123,7 +123,8 @@ class WebDataModuleFromConfig(pl.LightningDataModule):
         }
         # this is crucial to set correct image key to get the transofrms applied correctly
         img_key = dataset_config.get("image_key", "image.png")
-        transform_dict.update({img_key: image_transforms})
+        if include_images:
+            transform_dict.update({img_key: image_transforms})
 
         if "postprocess" in dataset_config:
             postprocess = instantiate_from_config(dataset_config["postprocess"])
@@ -157,12 +158,28 @@ class WebDataModuleFromConfig(pl.LightningDataModule):
         )
         print(f"Loading webdataset with {len(dset.pipeline[0].urls)} shards.")
 
+        decode_only = None
+        if not include_images:
+            decode_only = set(transform_dict.keys())
+            renaming = dataset_config.get("rename", None)
+            if renaming is not None:
+                decode_only.update(renaming.values())
+            decode_only.discard(img_key)
+            decode_only = sorted(decode_only) if len(decode_only) > 0 else None
+
         if self.is_video:
             dset = dset.decode("rgb", handler=wds.warn_and_continue)
         else:
-            dset = dset.decode("rgb", handler=wds.warn_and_continue).map_dict(
-                **transform_dict, handler=wds.warn_and_continue
-            )
+            if include_images:
+                dset = dset.decode("rgb", handler=wds.warn_and_continue).map_dict(
+                    **transform_dict, handler=wds.warn_and_continue
+                )
+            else:
+                dset = dset.decode(
+                    handler=wds.warn_and_continue, only=decode_only
+                )
+                if len(transform_dict) > 0:
+                    dset = dset.map_dict(**transform_dict, handler=wds.warn_and_continue)
 
         # change name of image key to be consistent with other datasets
         renaming = dataset_config.get("rename", None)
@@ -179,11 +196,11 @@ class WebDataModuleFromConfig(pl.LightningDataModule):
 
         return loader
 
-    def train_dataloader(self):
-        return self.make_loader(self.train)
+    def train_dataloader(self, include_images=True):
+        return self.make_loader(self.train, include_images=include_images)
 
-    def val_dataloader(self):
-        return self.make_loader(self.validation, train=False)
+    def val_dataloader(self, include_images=True):
+        return self.make_loader(self.validation, train=False, include_images=include_images)
 
     def test_dataloader(self):
         return self.make_loader(self.test, train=False)

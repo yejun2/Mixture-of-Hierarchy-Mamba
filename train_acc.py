@@ -47,6 +47,25 @@ def out2img(samples):
     )
 
 
+def _grad_norm(param):
+    if param is None or param.grad is None:
+        return None
+    return float(param.grad.detach().norm().item())
+
+
+def collect_gradient_logging_metrics(raw_model):
+    metrics = {}
+    norm_f = getattr(raw_model, "norm_f", None)
+    if norm_f is not None:
+        weight_grad = _grad_norm(getattr(norm_f, "weight", None))
+        if weight_grad is not None:
+            metrics["grad/norm_f_weight"] = weight_grad
+        bias_grad = _grad_norm(getattr(norm_f, "bias", None))
+        if bias_grad is not None:
+            metrics["grad/norm_f_bias"] = bias_grad
+    return metrics
+
+
 def update_note(args, accelerator, slurm_job_id):
     args.note = (
         "v5"
@@ -112,14 +131,21 @@ def init_zs(args, device, in_channels, input_size):
 @hydra.main(config_path="config", config_name="default", version_base=None)
 def main(args):
     assert torch.cuda.is_available(), "Training currently requires at least one GPU."
-    from accelerate.utils import AutocastKwargs
+    from accelerate.utils import AutocastKwargs, DistributedDataParallelKwargs
 
-    kwargs = AutocastKwargs(enabled=True)
+    autocast_kwargs = AutocastKwargs(enabled=True)
+    ddp_kwargs = DistributedDataParallelKwargs(
+        find_unused_parameters=bool(
+            getattr(args.model.params, "use_multiscale_fusion_head", False)
+        )
+    )
     # https://github.com/pytorch/pytorch/issues/40497#issuecomment-709846922
     # https://github.com/huggingface/accelerate/issues/2487#issuecomment-1969997224
 
     accelerator = accelerate.Accelerator(
-        kwargs_handlers=[kwargs], mixed_precision=args.mixed_precision
+        kwargs_handlers=[autocast_kwargs, ddp_kwargs],
+        mixed_precision=args.mixed_precision,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
     )
     device = accelerator.device
     accelerate.utils.set_seed(args.global_seed, device_specific=True)
@@ -166,17 +192,28 @@ def main(args):
                 "world_size": accelerator.state.num_processes,
                 "local_batch_size": args.data.batch_size
                 * accelerator.state.num_processes,
+                "effective_batch_size": args.data.batch_size
+                * accelerator.state.num_processes
+                * args.gradient_accumulation_steps,
                 "job_id": slurm_job_id,
             }
             extra_wb_kwargs = dict()
             if args.ckpt is not None:
                 runid = wandb_runid_from_checkpoint(args.ckpt)
-                extra_wb_kwargs["resume"] = "must"
+                # Be permissive here: old checkpoints may have been logged under a
+                # different/default entity, so strict resume can fail even though
+                # model checkpoint resume is valid.
+                extra_wb_kwargs["resume"] = "allow"
                 extra_wb_kwargs["id"] = runid
             args.note = update_note(
                 args=args, accelerator=accelerator, slurm_job_id=slurm_job_id
             )
+            wandb_entity = getattr(args.wandb, "entity", None)
+            wandb_key = getattr(args.wandb, "key", None)
+            if wandb_key:
+                wandb.login(key=wandb_key)
             wandb.init(
+                entity=wandb_entity,
                 project=args.wandb.project,
                 name=args.note,
                 config=config_dict,
@@ -184,8 +221,9 @@ def main(args):
                 mode="online",
                 **extra_wb_kwargs,
             )
+            run_entity = getattr(wandb.run, "entity", None) or wandb_entity
             wandb_project_url = (
-                f"https://wandb.ai/dpose-team/{wandb.run.project}/runs/{wandb.run.id}"
+                f"https://wandb.ai/{run_entity}/{wandb.run.project}/runs/{wandb.run.id}"
             )
             wandb_sync_command = (
                 f"wandb sync {experiment_dir}/wandb/latest-run --append"
@@ -196,6 +234,19 @@ def main(args):
     best_fid = 666
 
     model, in_channels, input_size = get_model(args, device)
+    raw_model = model
+    if accelerator.is_main_process and hasattr(model, "hierarchy_stage_layout"):
+        logger.info(
+            f"hierarchical_context={getattr(model, 'hierarchical_context', False)}, "
+            f"window={getattr(model, 'hierarchy_window_size', None)}, "
+            f"stride={getattr(model, 'hierarchy_stride', None)}, "
+            f"compress={getattr(model, 'context_compress_type', None)}, "
+            f"stage_depth={getattr(model, 'hierarchy_stage_depth', None)}, "
+            f"allow_partial={getattr(model, 'hierarchy_allow_partial', None)}, "
+            f"output_mode={getattr(model, 'hierarchical_output_mode', None)}, "
+            f"final_resolution={getattr(model, 'hierarchy_final_resolution', None)}, "
+            f"stage_layout={getattr(model, 'hierarchy_stage_layout', None)}"
+        )
 
     try:
         assert (
@@ -208,6 +259,7 @@ def main(args):
         )
 
     ema_model = deepcopy(model).to(device)
+    requires_grad(ema_model, False)
 
     # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
     opt = torch.optim.AdamW(
@@ -244,29 +296,79 @@ def main(args):
     logger.info(f"#parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     datamod = WebDataModuleFromConfig(**args.data)
-    loader = datamod.train_dataloader()
+    train_loader_include_images = not (
+        args.use_latent and "facehq" in str(args.data.name)
+    )
+    loader = datamod.train_dataloader(include_images=train_loader_include_images)
+    real_img_loader = datamod.train_dataloader(include_images=True)
 
-    loader, opt, model, ema_model = accelerator.prepare(loader, opt, model, ema_model)
+    loader, real_img_loader, opt, model = accelerator.prepare(
+        loader, real_img_loader, opt, model
+    )
+    raw_model = accelerator.unwrap_model(model)
 
-    print("dtype:", model.final_layer.linear.weight.dtype)
+    final_layer = getattr(raw_model, "final_layer", None)
+    if final_layer is not None and getattr(final_layer, "linear", None) is not None:
+        print("dtype:", final_layer.linear.weight.dtype)
+    else:
+        print("dtype: final_layer.linear not available")
     if args.ckpt is not None:
         args.ckpt = get_max_ckpt_from_dir(args.ckpt)
 
     if args.ckpt is not None:  # before accelerate.wrap()
         ckpt_path = args.ckpt
         state_dict = torch.load(ckpt_path, map_location=lambda storage, loc: storage)
-        model.load_state_dict(state_dict["model"])
+        model_state_dict = state_dict["model"]
+        if any(k.startswith("module.") for k in model_state_dict.keys()):
+            model_state_dict = {
+                k.removeprefix("module."): v for k, v in model_state_dict.items()
+            }
+        allow_aux_4x4_missing = bool(
+            getattr(args.model.params, "use_aux_4x4_context", False)
+        )
+
+        def load_state_allowing_aux_4x4_missing(module, weights, label):
+            if not allow_aux_4x4_missing:
+                module.load_state_dict(weights)
+                return
+            incompatible = module.load_state_dict(weights, strict=False)
+            unexpected = list(incompatible.unexpected_keys)
+            disallowed_missing = [
+                key
+                for key in incompatible.missing_keys
+                if not key.startswith("aux_4x4_context_adapter.")
+            ]
+            if unexpected or disallowed_missing:
+                raise RuntimeError(
+                    f"Unexpected {label} checkpoint keys: {unexpected}; "
+                    f"non-aux missing keys: {disallowed_missing}"
+                )
+            if incompatible.missing_keys:
+                logging.warning(
+                    "Loaded %s with newly initialized aux_4x4_context parameters: %s",
+                    label,
+                    incompatible.missing_keys,
+                )
+
+        load_state_allowing_aux_4x4_missing(raw_model, model_state_dict, "model")
         model = model.to(device)
-        ema_model.load_state_dict(state_dict["ema"])
+        load_state_allowing_aux_4x4_missing(ema_model, state_dict["ema"], "ema")
         ema_model = ema_model.to(device)
-        opt.load_state_dict(state_dict["opt"])
+        try:
+            opt.load_state_dict(state_dict["opt"])
+        except ValueError as exc:
+            logging.warning(
+                "Skipping optimizer state load due to parameter mismatch. "
+                "This is expected when resuming from a checkpoint created before "
+                "the fusion/output-head refactor. Details: %s",
+                exc,
+            )
 
         logging.info("overriding args with checkpoint args")
         logging.info(args)
         train_steps = state_dict["train_steps"]
         best_fid = state_dict["best_fid"]
         logging.info(f"Loaded checkpoint from {ckpt_path}, train_steps={train_steps}")
-        requires_grad(ema_model, False)
         if rank == 0:
             shutil.copy(ckpt_path, checkpoint_dir)
 
@@ -275,6 +377,8 @@ def main(args):
 
     log_steps = 0
     running_loss = 0
+    running_grad_metrics = {}
+    running_grad_metric_counts = {}
     start_time = time()
 
     sample_vis_n = args.data.sample_vis_n
@@ -282,7 +386,7 @@ def main(args):
     zs = torch.randn(sample_vis_n, in_channels, input_size, input_size, device=device)
     rankzero_logging_info(rank, f"zs shape: {zs.shape}")
 
-    model_fn = ema_model.forward
+    model_fn = getattr(ema_model, "forward_transport", ema_model.forward)
 
     def get_data_generator():
         _init = train_steps
@@ -327,7 +431,7 @@ def main(args):
     def get_real_img_generator():  # [0,255]
         while True:
             for data in tqdm(
-                loader,
+                real_img_loader,
                 disable=not accelerator.is_main_process,
                 initial=0,
                 desc="generate_real_img",
@@ -437,17 +541,29 @@ def main(args):
         model_kwargs = dict(y=y)
         before_forward = torch.cuda.memory_allocated(device)
 
-        loss_dict = transport.training_losses(model, x, model_kwargs)
-        loss = loss_dict["loss"].mean()
-        after_forward = torch.cuda.memory_allocated(device)
-        opt.zero_grad()
-        accelerator.backward(loss)
-        opt.step()
-        after_backward = torch.cuda.memory_allocated(device)
-        grad_clip(opt, model, max_grad_norm=args.max_grad_norm)  # clip gradient
-        update_ema(ema_model, model)
+        with accelerator.accumulate(model):
+            loss_dict = transport.training_losses(model, x, model_kwargs)
+            loss = loss_dict["loss"].mean()
+            after_forward = torch.cuda.memory_allocated(device)
+            accelerator.backward(loss)
+            if accelerator.sync_gradients:
+                grad_logging_metrics = collect_gradient_logging_metrics(raw_model)
+                for key, value in grad_logging_metrics.items():
+                    running_grad_metrics[key] = running_grad_metrics.get(key, 0.0) + value
+                    running_grad_metric_counts[key] = (
+                        running_grad_metric_counts.get(key, 0) + 1
+                    )
+                grad_clip(opt, model, max_grad_norm=args.max_grad_norm)
+            opt.step()
+            opt.zero_grad()
 
+        after_backward = torch.cuda.memory_allocated(device)
         running_loss += loss.item()
+
+        if not accelerator.sync_gradients:
+            continue
+
+        update_ema(ema_model, raw_model)
         log_steps += 1
         train_steps += 1
         if train_steps % args.log_every == 0:
@@ -480,6 +596,43 @@ def main(args):
                         "gpu_mem_after_forward": after_forward,
                         "gpu_mem_after_backward": after_backward,
                     }
+                    if hasattr(raw_model, "get_hierarchy_logging_metrics"):
+                        wandb_dict.update(raw_model.get_hierarchy_logging_metrics())
+                        wandb_dict["hierarchy/scan_type"] = getattr(
+                            raw_model, "scan_type", "unknown"
+                        )
+                        wandb_dict["hierarchy/context_compress_type"] = getattr(
+                            raw_model, "context_compress_type", "unknown"
+                        )
+                        wandb_dict["hierarchy/output_mode"] = getattr(
+                            raw_model, "hierarchical_output_mode", "unknown"
+                        )
+                        wandb_dict["hierarchy/stage_depth"] = getattr(
+                            raw_model, "hierarchy_stage_depth", -1
+                        )
+                        wandb_dict["fusion/enabled"] = getattr(
+                            raw_model, "use_multiscale_fusion_head", False
+                        )
+                        wandb_dict["fusion/mode"] = getattr(
+                            raw_model, "fusion_mode", "disabled"
+                        )
+                        wandb_dict["fusion/selected_stages"] = ",".join(
+                            str(v)
+                            for v in getattr(raw_model, "fusion_selected_stages", [])
+                        )
+                        wandb_dict["fusion/gate_type"] = getattr(
+                            raw_model, "fusion_gate_type", "unknown"
+                        )
+                        wandb_dict["fusion/pos_embed_type"] = getattr(
+                            raw_model, "fusion_pos_embed_type", "unknown"
+                        )
+                        wandb_dict["fusion/prediction_head_type"] = getattr(
+                            raw_model, "fusion_prediction_head_type", "unknown"
+                        )
+                    for key, total in running_grad_metrics.items():
+                        count = running_grad_metric_counts.get(key, 0)
+                        if count > 0:
+                            wandb_dict[key] = total / count
                     wandb.log(
                         wandb_dict,
                         step=train_steps,
@@ -487,12 +640,14 @@ def main(args):
             # Reset monitoring variables:
             running_loss = 0
             log_steps = 0
+            running_grad_metrics = {}
+            running_grad_metric_counts = {}
             start_time = time()
 
         if train_steps % args.ckpt_every == 0 and train_steps > 0:
             if accelerator.is_main_process:
                 checkpoint = {
-                    "model": model.state_dict(),
+                    "model": raw_model.state_dict(),
                     "ema": ema_model.state_dict(),
                     "opt": opt.state_dict(),
                     "args": args,

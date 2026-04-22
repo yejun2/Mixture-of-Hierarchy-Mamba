@@ -8,8 +8,16 @@ params:
     depth: 24  
     scan_type: v2
     use_pe: 2
+    hierarchical_context: false
+    hierarchy_window_size: 4
+    hierarchy_stride: 4
+    context_compress_type: mean
+    hierarchy_max_stages: null
+    hierarchy_stage_depths: null
+    hierarchy_stage_depth: null
+    hierarchy_allow_partial: false
+    hierarchical_output_mode: prediction
    
 
 
  
-
