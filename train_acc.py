@@ -563,7 +563,7 @@ def main(args):
         if not accelerator.sync_gradients:
             continue
 
-        update_ema(ema_model, raw_model)
+        update_ema(ema_model, raw_model, decay=args.ema_rate)
         log_steps += 1
         train_steps += 1
         if train_steps % args.log_every == 0:

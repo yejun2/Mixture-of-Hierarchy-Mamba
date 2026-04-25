@@ -19,6 +19,8 @@ SAMPLE_FID_BS="${SAMPLE_FID_BS:-4}"
 GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-1}"
 TRAIN_STEPS="${TRAIN_STEPS:-600000}"
 OPTIM_LR="${OPTIM_LR:-}"
+EMA_RATE="${EMA_RATE:-}"
+TRAIN_SHUFFLE="${TRAIN_SHUFFLE:-}"
 
 DATA_CONFIG="${DATA_CONFIG:-facehq_1024}"
 DATA_TAR_BASE="${DATA_TAR_BASE:-/SSD4/vipnu/datasets/celeba_hq_256_hf_shard/}"
@@ -184,6 +186,12 @@ if [[ -n "${CKPT_PATH}" ]]; then
 fi
 if [[ -n "${OPTIM_LR}" ]]; then
   EXTRA_ARGS+=("optim.lr=${OPTIM_LR}")
+fi
+if [[ -n "${EMA_RATE}" ]]; then
+  EXTRA_ARGS+=("ema_rate=${EMA_RATE}")
+fi
+if [[ -n "${TRAIN_SHUFFLE}" ]]; then
+  EXTRA_ARGS+=("++data.train.shuffle=${TRAIN_SHUFFLE}")
 fi
 
 LAUNCH_ARGS=(
