@@ -1,5 +1,5 @@
-name: hierarchy_hybrid_local_v2
-target: model_hierarchy_hybrid.HierarchicalMambaHybrid
+name: hierarchy_hybrid_dynamic_bottleneck_v2
+target: model_hierarchy_hybrid.DynamicBottleneckHierarchicalMambaHybrid
 params:
     img_dim: 32
     in_channels: 4
@@ -19,7 +19,7 @@ params:
     hierarchical_output_mode: prediction
     use_multiscale_fusion_head: true
     fusion_mode: gated_sum
-    fusion_selected_stages: "32,16"
+    fusion_selected_stages: "32,16,8"
     fusion_anchor_resolution: 8
     decoder_anchor_resolution: 8
     fusion_stage_dim: 320
@@ -49,14 +49,17 @@ params:
     final_skip_refiner_conv_type: standard
     final_skip_refiner_use_channel_gate: true
     final_skip_refiner_use_spatial_gate: false
-    use_factorized_top4_router: false
+    use_aux_4x4_context: false
+    use_factorized_top4_router: true
     routed_stage_resolutions: "32,16,8"
     routed_stage_count: 3
     include_anchor_in_stage_router: true
-    stage_router_top_k: 3
+    stage_router_top_k: 2
     stage_router_weight_floor: 0.0
     stage_router_max_weight: 2.0
     stage_router_weight_mode: equal_selection
+    dynamic_bottleneck_candidate_stages: auto
+    dynamic_bottleneck_select_k: 2
     use_mamba_size_router: false
     mamba_size_router_stages: auto
     mamba_size_presets: "light:1:0.75,base:2:1.0,context:3:1.0"

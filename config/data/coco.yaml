@@ -18,7 +18,7 @@ num_workers: 1
 val_num_workers: 3 #
 multinode: True
 train:
-  shards: 'train-{000000..000100}.tar'
+  shards: 'train-{000000..000082}.tar'
   image_key: image.jpg
   rename:
     image: image.jpg
@@ -27,7 +27,7 @@ train:
     caption: caption.json
 
 validation:
-  shards: 'train-{000000..000010}.tar'
+  shards: 'val-{000000..000040}.tar'
   image_key: image.jpg
   rename:
     image: image.jpg

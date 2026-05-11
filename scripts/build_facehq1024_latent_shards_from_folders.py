@@ -24,14 +24,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Build FacesHQ1024-style WebDataset shards with raw SD-VAE latents from "
-            "a directory of numbered image folders such as 00000/, 01000/, ..."
+            "a directory of images or numbered image folders such as 00000/, 01000/, ..."
         )
     )
     parser.add_argument(
         "--input-root",
         type=Path,
         required=True,
-        help="Root directory that contains numbered folders with images.",
+        help="Root directory that contains images directly or numbered folders with images.",
     )
     parser.add_argument(
         "--output-dir",
@@ -122,6 +122,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Call torch.cuda.empty_cache() every micro batch (safer, slower).",
     )
+    parser.add_argument(
+        "--store-images",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Store resized image.png entries next to latent.npy. Training and FID "
+            "recovery currently need images unless the training loop is changed."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -151,7 +160,7 @@ def parse_extensions(ext_string: str) -> Sequence[str]:
     return tuple(sorted(set(extensions)))
 
 
-def list_numbered_image_paths(
+def list_image_paths(
     input_root: Path, extensions: Sequence[str], recursive: bool
 ) -> List[Path]:
     if not input_root.exists():
@@ -159,11 +168,16 @@ def list_numbered_image_paths(
     if not input_root.is_dir():
         raise NotADirectoryError(f"Input root is not a directory: {input_root}")
 
-    child_dirs = sorted([p for p in input_root.iterdir() if p.is_dir()], key=natural_sort_key)
-    if not child_dirs:
-        raise RuntimeError(f"No subdirectories found under {input_root}")
-
     image_paths: List[Path] = []
+    direct_files = [
+        p
+        for p in input_root.iterdir()
+        if p.is_file() and p.suffix.lower() in extensions
+    ]
+    direct_files.sort(key=natural_sort_key)
+    image_paths.extend(direct_files)
+
+    child_dirs = sorted([p for p in input_root.iterdir() if p.is_dir()], key=natural_sort_key)
     for child_dir in child_dirs:
         iterator: Iterable[Path]
         iterator = child_dir.rglob("*") if recursive else child_dir.iterdir()
@@ -271,7 +285,7 @@ def main() -> None:
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-    image_paths = list_numbered_image_paths(
+    image_paths = list_image_paths(
         input_root=args.input_root,
         extensions=extensions,
         recursive=args.recursive,
@@ -299,6 +313,7 @@ def main() -> None:
     )
 
     keys: List[str] = []
+    filename_bytes_batch: List[bytes] = []
     png_bytes_batch: List[bytes] = []
     pixel_batch: List[torch.Tensor] = []
     validated_shape = False
@@ -314,6 +329,9 @@ def main() -> None:
 
             png_bytes_batch.append(encode_png_bytes(resized))
             pixel_batch.append(transform(resized))
+            filename_bytes_batch.append(
+                str(image_path.relative_to(args.input_root)).encode("utf-8")
+            )
             keys.append(f"{image_idx:09d}")
 
             if len(keys) < args.batch_size:
@@ -335,18 +353,20 @@ def main() -> None:
                 validated_shape = True
 
             for i in range(len(keys)):
-                writer.write(
-                    {
-                        "__key__": keys[i],
-                        "image.png": png_bytes_batch[i],
-                        # Keep raw VAE latents; training code multiplies by 0.18215.
-                        "latent.npy": encode_npy_bytes(latents[i].astype(np.float32)),
-                    }
-                )
+                sample = {
+                    "__key__": keys[i],
+                    # Keep raw VAE latents; training code multiplies by 0.18215.
+                    "latent.npy": encode_npy_bytes(latents[i].astype(np.float32)),
+                    "filename.txt": filename_bytes_batch[i],
+                }
+                if args.store_images:
+                    sample["image.png"] = png_bytes_batch[i]
+                writer.write(sample)
                 total_written += 1
                 pbar.update(1)
 
             keys.clear()
+            filename_bytes_batch.clear()
             png_bytes_batch.clear()
             pixel_batch.clear()
 
@@ -366,13 +386,14 @@ def main() -> None:
                 validate_latent_shape(latents, args.image_size)
 
             for i in range(len(keys)):
-                writer.write(
-                    {
-                        "__key__": keys[i],
-                        "image.png": png_bytes_batch[i],
-                        "latent.npy": encode_npy_bytes(latents[i].astype(np.float32)),
-                    }
-                )
+                sample = {
+                    "__key__": keys[i],
+                    "latent.npy": encode_npy_bytes(latents[i].astype(np.float32)),
+                    "filename.txt": filename_bytes_batch[i],
+                }
+                if args.store_images:
+                    sample["image.png"] = png_bytes_batch[i]
+                writer.write(sample)
                 total_written += 1
                 pbar.update(1)
     finally:
@@ -389,6 +410,7 @@ def main() -> None:
         "Stored latent shape is expected to be "
         f"(4, {args.image_size // 8}, {args.image_size // 8}) for image_size={args.image_size}."
     )
+    print(f"Stored images: {args.store_images}")
 
 
 if __name__ == "__main__":

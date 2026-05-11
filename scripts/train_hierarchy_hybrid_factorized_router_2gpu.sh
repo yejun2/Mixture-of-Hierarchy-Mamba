@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Flexible factorized-router preset.
+# Works with different latent sizes by deriving fusion/router stages from MODEL_IMG_DIM.
+# Examples:
+#   MODEL_IMG_DIM=32  IMAGE_SIZE=256  FUSION_ANCHOR_RESOLUTION=4 ROUTED_STAGE_COUNT=4 bash ...
+#   MODEL_IMG_DIM=128 IMAGE_SIZE=1024 FUSION_ANCHOR_RESOLUTION=8 ROUTED_STAGE_COUNT=5 bash ...
+
+export MODEL_CONFIG="${MODEL_CONFIG:-hierarchy_hybrid_local_v2}"
+export SCAN_TYPE="${SCAN_TYPE:-v2}"
+
+export IMAGE_SIZE="${IMAGE_SIZE:-1024}"
+export MODEL_IMG_DIM="${MODEL_IMG_DIM:-128}"
+export FUSION_ANCHOR_RESOLUTION="${FUSION_ANCHOR_RESOLUTION:-8}"
+export DECODER_ANCHOR_RESOLUTION="${DECODER_ANCHOR_RESOLUTION:-${FUSION_ANCHOR_RESOLUTION}}"
+
+export USE_FACTORIZED_TOP4_ROUTER="${USE_FACTORIZED_TOP4_ROUTER:-true}"
+export ROUTED_STAGE_RESOLUTIONS="${ROUTED_STAGE_RESOLUTIONS:-auto}"
+export ROUTED_STAGE_COUNT="${ROUTED_STAGE_COUNT:-5}"
+export INCLUDE_ANCHOR_IN_STAGE_ROUTER="${INCLUDE_ANCHOR_IN_STAGE_ROUTER:-true}"
+export STAGE_ROUTER_TOP_K="${STAGE_ROUTER_TOP_K:-4}"
+export STAGE_ROUTER_WEIGHT_FLOOR="${STAGE_ROUTER_WEIGHT_FLOOR:-0.0}"
+export STAGE_ROUTER_MAX_WEIGHT="${STAGE_ROUTER_MAX_WEIGHT:-2.0}"
+export STAGE_ROUTER_WEIGHT_MODE="${STAGE_ROUTER_WEIGHT_MODE:-selection}"
+
+export USE_MAMBA_SIZE_ROUTER="${USE_MAMBA_SIZE_ROUTER:-true}"
+export MAMBA_SIZE_ROUTER_STAGES="${MAMBA_SIZE_ROUTER_STAGES:-auto}"
+export MAMBA_SIZE_PRESETS="${MAMBA_SIZE_PRESETS:-small:1:0.75,base:2:1.0,large:4:1.25}"
+export MAMBA_SIZE_ROUTER_WEIGHT_MODE="${MAMBA_SIZE_ROUTER_WEIGHT_MODE:-selection}"
+
+export USE_COMPRESSION_ROUTER="${USE_COMPRESSION_ROUTER:-true}"
+export COMPRESSION_ROUTER_STAGES="${COMPRESSION_ROUTER_STAGES:-auto}"
+
+export FUSION_MODE="${FUSION_MODE:-gated_sum}"
+export FUSION_CHANNEL_GATE_STAGES="${FUSION_CHANNEL_GATE_STAGES:-auto}"
+export FUSION_USE_SPATIAL_GATE="${FUSION_USE_SPATIAL_GATE:-false}"
+
+if [[ -z "${FUSION_SELECTED_STAGES:-}" ]]; then
+  current="${MODEL_IMG_DIM}"
+  stages=()
+  while [[ "${current}" -ge "${FUSION_ANCHOR_RESOLUTION}" ]]; do
+    stages+=("${current}")
+    if [[ "${current}" -eq "${FUSION_ANCHOR_RESOLUTION}" ]]; then
+      break
+    fi
+    current=$((current / 2))
+  done
+  FUSION_SELECTED_STAGES="$(IFS=,; echo "${stages[*]}")"
+  export FUSION_SELECTED_STAGES
+fi
+
+if [[ "${FUSION_CHANNEL_GATE_STAGES}" == "auto" ]]; then
+  FUSION_CHANNEL_GATE_STAGES="${FUSION_SELECTED_STAGES}"
+  export FUSION_CHANNEL_GATE_STAGES
+fi
+
+export USE_CHECKPOINT="${USE_CHECKPOINT:-true}"
+export BATCH_SIZE_PER_GPU="${BATCH_SIZE_PER_GPU:-8}"
+export VAL_BATCH_SIZE_PER_GPU="${VAL_BATCH_SIZE_PER_GPU:-${BATCH_SIZE_PER_GPU}}"
+export GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-4}"
+export SAMPLE_FID_BS="${SAMPLE_FID_BS:-2}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec bash "${SCRIPT_DIR}/train_facehq1024_hierarchy_hybrid_local_v2_2gpu.sh" "$@"

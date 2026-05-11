@@ -1,0 +1,117 @@
+name: hierarchy_context_denoiser_v1
+target: model_hierarchy_hybrid.HierarchyContextDenoiserV1
+params:
+    img_dim: 32
+    in_channels: 4
+    out_channels: 4
+    patch_size: 1
+    embed_dim: 256
+    scan_type: v2
+    use_pe: 2
+    hierarchy_window_size: 2
+    hierarchy_stride: 2
+    first_layer_stride: 2
+    hierarchy_stage_depth: 3
+    hierarchy_max_stages: null
+    hierarchy_allow_partial: false
+    context_compress_type: mean
+    share_stage_processor: false
+    hierarchical_output_mode: prediction
+
+    # Encoder hierarchy.
+    highres_stage_depth: 4
+    bottleneck_stage_depth: 4
+    downsample_use_premix: true
+    downsample_premix_depth: 1
+    downsample_conv_type: standard
+    highres_local_conv_depth: 3
+    highres_local_conv_type: standard
+
+    # Kept for compatibility with existing launchers; the subclass removes
+    # decoder fusion modules and uses these values to size the context denoiser.
+    use_multiscale_fusion_head: true
+    fusion_mode: gated_sum
+    fusion_selected_stages: "32,16"
+    fusion_anchor_resolution: 8
+    decoder_anchor_resolution: 8
+    fusion_stage_dim: 320
+    fusion_stage_dim_overrides: "16:448,32:512"
+    fusion_gate_type: stage_timestep
+    fusion_pos_embed_type: anchor_shared
+    fusion_block_depth: 4
+    fusion_stage_depth_overrides: "16:4,32:6"
+    fusion_channel_gate_stages: "16,32"
+    fusion_use_spatial_gate: false
+    fusion_conv_depth: 1
+    fusion_pre_mamba_conv_depth: 1
+    fusion_post_mamba_conv_depth: 1
+    anchor_builder_depth: 3
+    fusion_prediction_head_type: anchor_conv_upsample
+    fusion_logging_verbose: true
+
+    # New context-denoiser path.
+    context_dim: 320
+    context_resolution: 8
+    context_projector_depth: 1
+    context_projector_conv_type: standard
+    context_aggregation: weighted_sum
+    denoiser_dim: 320
+    denoiser_depth: 4
+    denoiser_conv_depth: 1
+    denoiser_scan_type: v2
+
+    prediction_head_conv_depth: 3
+    prediction_head_conv_type: standard
+    final_skip_refiner_depth: 0
+    final_skip_refiner_conv_type: standard
+    final_skip_refiner_use_channel_gate: false
+    final_skip_refiner_use_spatial_gate: false
+
+    # Integrated SSR / CMR / EDR.
+    use_factorized_top4_router: false
+    routed_stage_resolutions: "32,16,8"
+    routed_stage_count: 3
+    include_anchor_in_stage_router: true
+    stage_router_top_k: 3
+    stage_router_weight_floor: 0.0
+    stage_router_max_weight: 2.0
+    stage_router_weight_mode: equal_selection
+
+    use_integrated_router_controller: true
+    integrated_controller_stage_top_k: 3
+    integrated_controller_hidden_dim: auto
+    integrated_controller_use_channel_gate: false
+    integrated_controller_channel_gate_scale: 0.1
+    integrated_controller_stage_select_mode: adaptive
+    integrated_controller_stage_select_threshold: 0.5
+    integrated_controller_stage_select_threshold_margin: 0.0
+    integrated_controller_stage_select_warmup_steps: 0
+    integrated_controller_stage_select_warmup_min_selected: 0
+    integrated_controller_stage_select_warmup_threshold_margin: 0.0
+    integrated_controller_stage_min_selected: 2
+    integrated_controller_stage_balance_mode: batch
+    integrated_controller_stage_use_scale_prior_context: true
+
+    use_compression_router: true
+    compression_router_stages: "16,8"
+    use_encoder_mamba_depth_router: true
+    encoder_mamba_depth_router_stages: auto
+    encoder_mamba_depth_router_top_k: 1
+
+    use_mamba_size_router: false
+    mamba_size_router_stages: auto
+    mamba_size_presets: "light:1:0.75,base:2:1.0,context:3:1.0"
+    encoder_mamba_size_presets: "light:1:0.75,base:2:1.0,context:3:1.25"
+    fusion_mamba_size_presets: "base:2:1.0,deep:4:1.25,xdeep:6:1.5"
+    encoder_mamba_size_preset_overrides: ""
+    fusion_mamba_size_preset_overrides: ""
+    mamba_size_router_top_k: 1
+    mamba_size_router_weight_mode: selection
+
+    use_aux_4x4_context: false
+    use_dynamic_bottleneck: false
+    dynamic_bottleneck_candidate_stages: auto
+    stage_scan_type_overrides: ""
+    local_mamba_stage_resolutions: ""
+    local_mamba_window_size_overrides: ""
+    local_mamba_shift_resolutions: ""

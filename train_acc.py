@@ -63,6 +63,29 @@ def collect_gradient_logging_metrics(raw_model):
         bias_grad = _grad_norm(getattr(norm_f, "bias", None))
         if bias_grad is not None:
             metrics["grad/norm_f_bias"] = bias_grad
+    router_sq_norm = 0.0
+    router_max_norm = 0.0
+    router_grad_count = 0
+    router_param_count = 0
+    router_missing_grad_count = 0
+    for name, param in raw_model.named_parameters():
+        if "router" not in name:
+            continue
+        router_param_count += 1
+        grad_norm = _grad_norm(param)
+        if grad_norm is None:
+            router_missing_grad_count += 1
+            continue
+        router_grad_count += 1
+        router_sq_norm += grad_norm * grad_norm
+        router_max_norm = max(router_max_norm, grad_norm)
+    if router_param_count > 0:
+        metrics["grad/router_total_norm"] = router_sq_norm ** 0.5
+        metrics["grad/router_max_param_norm"] = router_max_norm
+        metrics["grad/router_param_count"] = float(router_param_count)
+        metrics["grad/router_missing_fraction"] = (
+            router_missing_grad_count / max(1, router_param_count)
+        )
     return metrics
 
 
@@ -164,6 +187,9 @@ def main(args):
         args.data.sample_fid_bs * accelerator.state.num_processes
     )
     assert _fid_eval_batch_nums > 0, f"{_fid_eval_batch_nums} <= 0"
+    sample_fid_start_step = int(
+        OmegaConf.select(args, "data.sample_fid_start_step", default=0) or 0
+    )
 
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
     logging.info(f"slurm_job_id: {slurm_job_id}")
@@ -205,6 +231,11 @@ def main(args):
                 # model checkpoint resume is valid.
                 extra_wb_kwargs["resume"] = "allow"
                 extra_wb_kwargs["id"] = runid
+            wandb_tags = os.environ.get("WANDB_TAGS", "").strip()
+            if wandb_tags:
+                extra_wb_kwargs["tags"] = [
+                    tag.strip() for tag in wandb_tags.split(",") if tag.strip()
+                ]
             args.note = update_note(
                 args=args, accelerator=accelerator, slurm_job_id=slurm_job_id
             )
@@ -296,11 +327,16 @@ def main(args):
     logger.info(f"#parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     datamod = WebDataModuleFromConfig(**args.data)
+    facehq_latent_only = bool(
+        args.use_latent
+        and "facehq" in str(args.data.name)
+        and getattr(args.data, "latent_only", False)
+    )
     train_loader_include_images = not (
         args.use_latent and "facehq" in str(args.data.name)
     )
     loader = datamod.train_dataloader(include_images=train_loader_include_images)
-    real_img_loader = datamod.train_dataloader(include_images=True)
+    real_img_loader = datamod.train_dataloader(include_images=not facehq_latent_only)
 
     loader, real_img_loader, opt, model = accelerator.prepare(
         loader, real_img_loader, opt, model
@@ -439,7 +475,12 @@ def main(args):
                 if has_text(args):
                     yield out2img(data["image"]).to(device)
                 elif "facehq" in str(args.data.name):
-                    yield out2img(data["image"]).to(device)
+                    if facehq_latent_only:
+                        with torch.no_grad():
+                            image = vae.decode(data["latent"].to(device)).sample
+                        yield out2img(image).to(device)
+                    else:
+                        yield out2img(data["image"]).to(device)
                 elif "ucf101" in str(args.data.name):
                     _video = data["frame_feature256"].to(device)
                     if args.is_latent:
@@ -659,7 +700,11 @@ def main(args):
                 logging.info(f"Saved checkpoint to {checkpoint_path}")
             accelerator.wait_for_everyone()
 
-        if train_steps % args.data.sample_fid_every == 0 and train_steps > 0:
+        if (
+            train_steps % args.data.sample_fid_every == 0
+            and train_steps > 0
+            and train_steps >= sample_fid_start_step
+        ):
             with torch.no_grad():  # very important
                 torch.cuda.empty_cache()
                 my_metric.reset()

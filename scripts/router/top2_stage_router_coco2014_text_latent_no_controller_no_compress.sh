@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# MS-COCO 2014 text-latent preset for standalone top-2 stage routing with a
+# dynamic bottleneck. Integrated controller and compression router are disabled;
+# stride-1 downsample premixing is also disabled. The effective per-sample
+# bottleneck is the lowest-resolution selected stage:
+#   selected={32,16} -> bottleneck=16
+#   selected={32,8}  -> bottleneck=8
+#   selected={16,8}  -> bottleneck=8
+
+export MODEL_CONFIG="${MODEL_CONFIG:-hierarchy_hybrid_dynamic_bottleneck_v2}"
+export SCAN_TYPE="${SCAN_TYPE:-v2}"
+export CUDA_DEVICES="${CUDA_DEVICES:-0,1,2,3}"
+export NUM_PROCESSES="${NUM_PROCESSES:-4}"
+export MASTER_PORT="${MASTER_PORT:-0}"
+export MIXED_PRECISION="${MIXED_PRECISION:-bf16}"
+
+export DATA_CONFIG="${DATA_CONFIG:-coco}"
+export DATA_TAR_BASE="${DATA_TAR_BASE:-/SSD4/yjjung/datasets/coco2014_text_latent_wds}"
+if [[ -z "${TRAIN_SHARDS:-}" ]]; then
+  export TRAIN_SHARDS='train-{000000..000082}.tar'
+fi
+if [[ -z "${VAL_SHARDS:-}" ]]; then
+  export VAL_SHARDS='val-{000000..000040}.tar'
+fi
+export IMAGE_SIZE="${IMAGE_SIZE:-256}"
+export MODEL_IMG_DIM="${MODEL_IMG_DIM:-32}"
+export TEXT_CONTEXT_DIM="${TEXT_CONTEXT_DIM:-768}"
+
+export BATCH_SIZE_PER_GPU="${BATCH_SIZE_PER_GPU:-64}"
+export VAL_BATCH_SIZE_PER_GPU="${VAL_BATCH_SIZE_PER_GPU:-64}"
+export GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-1}"
+export NUM_WORKERS="${NUM_WORKERS:-4}"
+export VAL_NUM_WORKERS="${VAL_NUM_WORKERS:-2}"
+export TRAIN_STEPS="${TRAIN_STEPS:-600000}"
+export SAMPLE_FID_N="${SAMPLE_FID_N:-1000}"
+export SAMPLE_FID_EVERY="${SAMPLE_FID_EVERY:-100000}"
+export SAMPLE_FID_BS="${SAMPLE_FID_BS:-1}"
+export SAMPLE_VIS_N="${SAMPLE_VIS_N:-1}"
+export USE_CHECKPOINT="${USE_CHECKPOINT:-true}"
+export CKPT_EVERY="${CKPT_EVERY:-10000}"
+
+export EMBED_DIM="${EMBED_DIM:-256}"
+export HIERARCHY_STAGE_DEPTH="${HIERARCHY_STAGE_DEPTH:-3}"
+export HIGHRES_STAGE_DEPTH="${HIGHRES_STAGE_DEPTH:-4}"
+export BOTTLENECK_STAGE_DEPTH="${BOTTLENECK_STAGE_DEPTH:-4}"
+
+export DOWNSAMPLE_USE_PREMIX="${DOWNSAMPLE_USE_PREMIX:-false}"
+export DOWNSAMPLE_PREMIX_DEPTH="${DOWNSAMPLE_PREMIX_DEPTH:-0}"
+export DOWNSAMPLE_CONV_TYPE="${DOWNSAMPLE_CONV_TYPE:-standard}"
+export HIGHRES_LOCAL_CONV_DEPTH="${HIGHRES_LOCAL_CONV_DEPTH:-3}"
+export HIGHRES_LOCAL_CONV_TYPE="${HIGHRES_LOCAL_CONV_TYPE:-standard}"
+
+export FUSION_ANCHOR_RESOLUTION="${FUSION_ANCHOR_RESOLUTION:-8}"
+export DECODER_ANCHOR_RESOLUTION="${DECODER_ANCHOR_RESOLUTION:-8}"
+export FUSION_SELECTED_STAGES="${FUSION_SELECTED_STAGES:-32,16,8}"
+export FUSION_MODE="${FUSION_MODE:-gated_sum}"
+export FUSION_STAGE_DIM="${FUSION_STAGE_DIM:-320}"
+export FUSION_STAGE_DIM_OVERRIDES="${FUSION_STAGE_DIM_OVERRIDES:-16:448,32:512}"
+export FUSION_BLOCK_DEPTH="${FUSION_BLOCK_DEPTH:-4}"
+export FUSION_STAGE_DEPTH_OVERRIDES="${FUSION_STAGE_DEPTH_OVERRIDES:-16:4,32:6}"
+export FUSION_CHANNEL_GATE_STAGES="${FUSION_CHANNEL_GATE_STAGES:-16,32}"
+export FUSION_USE_SPATIAL_GATE="${FUSION_USE_SPATIAL_GATE:-false}"
+export FUSION_CONV_DEPTH="${FUSION_CONV_DEPTH:-1}"
+export FUSION_PRE_MAMBA_CONV_DEPTH="${FUSION_PRE_MAMBA_CONV_DEPTH:-1}"
+export FUSION_POST_MAMBA_CONV_DEPTH="${FUSION_POST_MAMBA_CONV_DEPTH:-1}"
+
+export PREDICTION_HEAD_CONV_DEPTH="${PREDICTION_HEAD_CONV_DEPTH:-3}"
+export PREDICTION_HEAD_CONV_TYPE="${PREDICTION_HEAD_CONV_TYPE:-standard}"
+export FINAL_SKIP_REFINER_DEPTH="${FINAL_SKIP_REFINER_DEPTH:-3}"
+export FINAL_SKIP_REFINER_CONV_TYPE="${FINAL_SKIP_REFINER_CONV_TYPE:-standard}"
+export FINAL_SKIP_REFINER_USE_CHANNEL_GATE="${FINAL_SKIP_REFINER_USE_CHANNEL_GATE:-true}"
+export FINAL_SKIP_REFINER_USE_SPATIAL_GATE="${FINAL_SKIP_REFINER_USE_SPATIAL_GATE:-false}"
+
+export USE_FACTORIZED_TOP4_ROUTER="${USE_FACTORIZED_TOP4_ROUTER:-true}"
+export ROUTED_STAGE_RESOLUTIONS="${ROUTED_STAGE_RESOLUTIONS:-32,16,8}"
+export ROUTED_STAGE_COUNT="${ROUTED_STAGE_COUNT:-3}"
+export INCLUDE_ANCHOR_IN_STAGE_ROUTER="${INCLUDE_ANCHOR_IN_STAGE_ROUTER:-true}"
+export STAGE_ROUTER_TOP_K="${STAGE_ROUTER_TOP_K:-2}"
+export STAGE_ROUTER_WEIGHT_FLOOR="${STAGE_ROUTER_WEIGHT_FLOOR:-0.0}"
+export STAGE_ROUTER_WEIGHT_MODE="${STAGE_ROUTER_WEIGHT_MODE:-equal_selection}"
+
+export USE_INTEGRATED_ROUTER_CONTROLLER="${USE_INTEGRATED_ROUTER_CONTROLLER:-false}"
+export USE_COMPRESSION_ROUTER="${USE_COMPRESSION_ROUTER:-false}"
+export COMPRESSION_ROUTER_STAGES="${COMPRESSION_ROUTER_STAGES:-16,8}"
+export USE_MAMBA_SIZE_ROUTER="${USE_MAMBA_SIZE_ROUTER:-false}"
+export USE_AUX_4X4_CONTEXT="${USE_AUX_4X4_CONTEXT:-false}"
+
+export NOTE="${NOTE:-dynamic_bottleneck_top2_stage_router_coco2014_text_latent_no_controller_no_compress}"
+export TIMESTAMP="${TIMESTAMP:-dynamic_bottleneck_top2_stage_router_coco2014_text_latent_no_controller_no_compress}"
+export WANDB_NAME="${WANDB_NAME:-${NOTE}}"
+export WANDB_TAGS="${WANDB_TAGS:-dynamic_bottleneck,top2_stage_router,no_integrated_controller,no_compression_router,no_downsample_premix,route32_16_8,coco2014,text_latent,bf16}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec bash "${SCRIPT_DIR}/../coco/train_coco2014_text_latent_hierarchy_hybrid.sh" "$@"

@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /SSD4/vipnu/hierarchical_zigma_v1/zigma
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${REPO_ROOT}"
 
-set +u
-source /SSD4/vipnu/anaconda3/etc/profile.d/conda.sh
-conda activate zigma_server_cuda124
-set -u
+if [[ -z "${CONDA_DEFAULT_ENV:-}" && -f /SSD4/yjjung/anaconda3/etc/profile.d/conda.sh ]]; then
+  set +u
+  source /SSD4/yjjung/anaconda3/etc/profile.d/conda.sh
+  conda activate MoHmamba_128
+  set -u
+fi
 
 MASTER_PORT="${MASTER_PORT:-8873}"
 CUDA_DEVICES="${CUDA_DEVICES:-2,3}"
@@ -18,6 +22,7 @@ VAL_NUM_WORKERS="${VAL_NUM_WORKERS:-4}"
 SAMPLE_FID_BS="${SAMPLE_FID_BS:-4}"
 GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-1}"
 TRAIN_STEPS="${TRAIN_STEPS:-600000}"
+CKPT_EVERY="${CKPT_EVERY:-}"
 
 DATA_CONFIG="${DATA_CONFIG:-facehq_1024}"
 DATA_TAR_BASE="${DATA_TAR_BASE:-/SSD4/vipnu/datasets/celeba_hq_256_hf_shard/}"
@@ -59,6 +64,7 @@ Environment overrides:
   MODEL_CONFIG=zigzag8_b1_pe2
   EMBED_DIM=768
   DEPTH=24
+  CKPT_EVERY=100
   USE_CHECKPOINT=false
 EOF
 }
@@ -146,6 +152,9 @@ fi
 EXTRA_ARGS=()
 if [[ -n "${CKPT_PATH}" ]]; then
   EXTRA_ARGS+=("ckpt=${CKPT_PATH}")
+fi
+if [[ -n "${CKPT_EVERY}" ]]; then
+  EXTRA_ARGS+=("ckpt_every=${CKPT_EVERY}")
 fi
 
 LAUNCH_ARGS=(

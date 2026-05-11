@@ -2,6 +2,7 @@ video_metrics/fvd/styleganv/i3d_torchscript.pt
 video_metrics/fvd/videogpt/i3d_pretrained_400.pt
 
 # Experiment outputs and generated artifacts
+.cache/
 outputs/
 checkpoints
 **/checkpoints/
@@ -19,6 +20,11 @@ log.txt
 papers/
 report/
 reports/
+.codex
+**/.codex_path_check
+analyze/current_font/
+analyze/large_font/
+analyze/router_probe_*/
 
 # Local secrets and service configs
 config/wandb/
