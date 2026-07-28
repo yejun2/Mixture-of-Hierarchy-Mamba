@@ -37,7 +37,7 @@ Thus, the hierarchical structure and CMR are motivated by the lack of explicit s
 
 **Response**
 
-While MoH significantly reduces active FLOPs and parameter footprint, current wall-clock latency is higher due to kernel launch overheads; we respectfully refer the reviewer to our response for **mhMg W1–W2** for the detailed analysis and planned CUDA optimizations.
+While MoH reduces active FLOPs and parameter footprint, current wall-clock latency is higher due to kernel launch overheads; we respectfully refer the reviewer to our response for **mhMg W1–W2** for the detailed analysis and planned CUDA optimizations.
 
 **W4. Routing overhead and system complexity**
 
