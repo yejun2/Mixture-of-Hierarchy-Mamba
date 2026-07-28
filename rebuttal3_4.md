@@ -4,16 +4,16 @@ We thank the reviewer for recognizing the substantial performance gains and the 
 
 **Response**
 
-We agree that recent Mamba-based diffusion models should be better covered. We therefore add U-Shape Mamba, the most directly related recent Self-attention-free Mamba baseline evaluated on MS-COCO at $256 \times 256$.
+We agree that recent Mamba-based diffusion models should be better covered. We therefore add U-Shape Mamba, the most directly related recent Self-attention-free Mamba baseline evaluated on MS-COCO at 256 × 256.
 
-*Conditional image generation on MS-COCO at $256 \times 256$.*
+*Conditional image generation on MS-COCO at 256 × 256.*
 
-| Method | Backbone | FID$^{5k}$ $\downarrow$ |
+| Method | Backbone | FID<sup>5k</sup> ↓ |
 | :--- | :---: | :---: |
-| VisionMamba | Mamba | $60.20$ |
-| ZigMa | Mamba | $41.80$ |
-| U-Shape Mamba | Mamba | $39.10$ |
-| MoH (ours) | Mamba | $\mathbf{20.00}$ |
+| VisionMamba | Mamba | 60.20 |
+| ZigMa | Mamba | 41.80 |
+| U-Shape Mamba | Mamba | 39.10 |
+| MoH (ours) | Mamba | **20.00** |
 
 U-Shape Mamba forms a U-shaped hierarchy by reducing the sequence after Mamba processing and reconstructing it in the decoder through upsampling and skip connections. In contrast, MoH treats each spatial resolution as a distinct Mamba scanning space, so the scanning process itself is performed hierarchically across multiple spatial scales.
 
