@@ -1,3 +1,5 @@
+**Response to Reviewer 2mSY**
+
 We thank the reviewer for recognizing the substantial performance gains and the alignment between timestep-conditioned routing and the coarse-to-fine nature of diffusion.
 
 **W1. Recent baselines**
