@@ -55,3 +55,15 @@ Profiling shows that the gap is caused mainly by fragmented dynamic execution. M
 The profiler-summed CUDA self time is 116.0 ms for MoH and 122.2 ms for ZigMa. Although this is not equivalent to wall-clock latency, it is consistent with the interpretation that the gap comes from small-kernel dispatch and memory operations rather than larger dense computation.
 
 Based on this analysis, we are developing a lightweight dispatch-and-combine CUDA extension that groups samples sharing a route, removes host-side scalar checks, and fuses feature gathering and output combination without replacing the optimized Mamba selective-scan kernels. We are also investigating CUDA graph capture for frequent route configurations. We will release the optimized execution path, profiling scripts, and measurements in the public repository. Until these measurements are available, we explicitly report the current wall-clock limitation and restrict our claim to reduced active computation and parameter footprint.
+
+### **W4. Architectural routing versus token/layer routing**
+
+We thank the reviewer for raising this point. Our intention is not to argue that architectural routing is superior to token- or layer-level routing. Rather, they operate along different and potentially complementary axes.
+
+Token-level routing typically dispatches tokens to different expert sub-networks based on input features. In contrast, MoH adjusts the internal capacity of the Mamba backbone across diffusion timesteps by selecting spatial stages, feature mixing and compression, and Mamba propagation depth. The goal is to adapt the architecture to the coarse-to-fine denoising process in a manner consistent with the properties of Mamba.
+
+Because these mechanisms operate at different levels, token-level routing could be incorporated into MoH as an additional routing space. For example, after EDR selects the stage-wise Mamba depth, a token-dependent prior could further route individual tokens within the selected computation path. This illustrates that token routing can coexist with, rather than replace, architectural routing. We view such a combination as a future work and will revise Sec. 4.4 to clarify this distinction.
+
+### **Minor: Typo in Eq. (11)**
+
+We thank the reviewer for identifying this typo. $K_c$ in Eq. (11) should be $K_d$, and we will correct it.
