@@ -8,7 +8,7 @@ We thank the reviewer for recognizing the substantial performance gains and the 
 
 We agree that recent Mamba-based diffusion models should be better covered. We therefore add U-Shape Mamba, the most directly related recent Self-attention-free Mamba baseline evaluated on MS-COCO at 256 × 256.
 
-*Conditional image generation on MS-COCO at 256 × 256.*
+**Conditional image generation on MS-COCO at 256 × 256.**
 
 | Method | Backbone | FID<sup>5k</sup> ↓ |
 | :--- | :---: | :---: |
@@ -25,7 +25,7 @@ We will also include hybrid models such as Dimba and DiMSUM as broader reference
 
 **Response**
 
-We thank the reviewer for this important question. Our motivation was to design a self-attention-free Mamba backbone that is better suited to vision.
+Our motivation was to design a self-attention-free Mamba backbone that is better suited to vision.
 
 Inductive bias is central to visual architecture design (Dai et al., NeurIPS 2021). CNNs explicitly encode locality and spatial hierarchy, while Transformers can model broad spatial relationships through direct token interactions. Mamba, however, was originally designed for one-dimensional sequences and does not inherently provide explicit multi-scale spatial representations for visual tokens. Most prior vision Mamba works mainly address this issue by modifying the scan strategy.
 
@@ -45,7 +45,7 @@ While MoH reduces active FLOPs and parameter footprint, current wall-clock laten
 
 **Response**
 
-Overall routing overhead is lightweight, adding only 0.666M parameters, corresponding to 0.52% of MoH-Base. Its arithmetic cost is 0.0015 GFLOPs per sample, below 0.002% of the total 80.9 GFLOPs. Thus, the routing overhead itself is negligible relative to the performance gain. The remaining wall-clock overhead mainly arises from inefficient hardware execution rather than from route prediction. We will explicitly discuss this limitation and hardware-aware optimization as future work.
+**Overall routing overhead is lightweight, adding only 0.666M parameters, corresponding to 0.52% of MoH-Base.** Its arithmetic cost is 0.0015 GFLOPs per sample, below 0.002% of the total 80.9 GFLOPs. Thus, the routing overhead itself is negligible relative to the performance gain. The remaining wall-clock overhead mainly arises from inefficient hardware execution rather than from route prediction. We will explicitly discuss this limitation and hardware-aware optimization as future work.
 
 **W5. Equation clarity**
 
