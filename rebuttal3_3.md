@@ -2,7 +2,9 @@
 
 We thank the reviewer for recognizing the novelty of architectural-level routing and for noting that the learned routing behavior autonomously follows a coarse-to-fine pattern.
 
-## **W1. Whether the architectural-routing viewpoint drives the gain**
+**W1. Whether the architectural-routing viewpoint drives the gain**
+
+**Response**
 
 We thank the reviewer for this important observation. We agree that the respective roles of the hierarchical backbone and timestep-conditioned routing should be distinguished more clearly.
 
@@ -25,7 +27,9 @@ We agree that the current presentation of Table 6 does not make this distinction
 | MoH | top-3 | ✓ | ✓ | ✓ | 9.51 | 8.39 | 2.46 | 2.91 |
 | MoH | adaptive-k | ✓ | ✓ | ✓ | **9.28** | 8.50 | 2.74 | 2.95 |
 
-## **W2. Coordination among routers**
+**W2. Coordination among routers**
+
+**Response**
 
 We thank the reviewer for pointing out that the coordination among the routers was not sufficiently formalized or verified.
 
@@ -48,11 +52,15 @@ This dependency reflects the distinct roles of the routing spaces. SSR operates 
 We have added the performance of CMR+EDR without IRC to Table~6 and will revise the manuscript accordingly. CMR+EDR without IRC obtains an FID of $11.03$, whereas CMR+EDR with IRC improves it to $9.51$.
 This variant obtains an FID of $11.03$, whereas the shared IRC improves it to $9.51$. The result directly shows that simply enabling both routers is insufficient, while coordinating their decisions through a shared prior substantially improves performance.
 
-## **W3. Efficiency claim**
+**W3. Efficiency claim**
+
+**Response**
 
 While MoH reduces active FLOPs and parameter footprint, current wall-clock latency is higher due to kernel launch overheads; we respectfully refer the reviewer to our response for **mhMg Q1–Q2** for the detailed analysis and planned CUDA optimizations.
 
-### **W4. Architectural routing versus token/layer routing**
+**W4. Architectural routing versus token/layer routing**
+
+**Response**
 
 We thank the reviewer for raising this point. Our intention is not to argue that architectural routing is superior to token- or layer-level routing. Rather, they operate along different and potentially complementary axes.
 
@@ -60,6 +68,8 @@ Token-level routing typically dispatches tokens to different expert sub-networks
 
 Because these mechanisms operate at different levels, token-level routing could be incorporated into MoH as an additional routing space. For example, after EDR selects the stage-wise Mamba depth, a token-dependent prior could further route individual tokens within the selected computation path. This illustrates that token routing can coexist with, rather than replace, architectural routing. We view such a combination as a future work and will revise Sec. 4.4 to clarify this distinction.
 
-### **Minor: Typo in Eq. (11)**
+**Minor: Typo in Eq. (11)**
+
+**Response**
 
 We thank the reviewer for identifying this typo. $K_c$ in Eq. (11) should be $K_d$, and we will correct it.
