@@ -10,13 +10,13 @@ We thank the reviewer for this important observation. We agree that the respecti
 
 Our contribution consists of two distinct but complementary axes.
 
-First, we introduce spatial hierarchy directly into the Mamba scanning process. Vision Mamba has relatively weak spatial and multi-scale inductive biases because image features are processed primarily as flattened sequences. Rather than simply attaching a conventional hierarchical backbone to Mamba, we perform Mamba scanning itself across multiple spatial resolutions and recurrently integrate the resulting multi-scale contexts. This provides Mamba with an explicit spatial representation structure that is important for visual generation. Quantitatively, this hierarchical Mamba backbone improves FID from 14.27 for the flat Mamba baseline to ''11.93''.
+First, we introduce spatial hierarchy directly into the Mamba scanning process. Vision Mamba has relatively weak spatial and multi-scale inductive biases because image features are processed primarily as flattened sequences. **Rather than simply attaching a conventional hierarchical backbone to Mamba, we introduce Mamba scanning itself across multiple spatial resolutions and recurrently integrate the resulting multi-scale contexts.** This provides Mamba with an explicit spatial representation structure that is important for visual generation. Quantitatively, this hierarchical Mamba backbone improves FID from 14.27 for the flat Mamba baseline to 11.93.
 
-Second, we adapt both the spatial hierarchy and Mamba processing depth to the coarse-to-fine denoising pattern of diffusion. The relevance of each spatial resolution changes across timesteps: coarse representations are more important during global structure formation, while fine-resolution features become increasingly important during detail refinement. Accordingly, SSR selects the active spatial stages at each timestep. EDR further adjusts Mamba depth, based on the observation that deeper recurrent propagation produces more aggregated representations, whereas shallower processing better preserves local details. CMR complements this by adapting feature mixing and compression before scanning.
+**Second, we adapt both the spatial hierarchy and Mamba processing depth to the coarse-to-fine denoising pattern of diffusion.** The relevance of each spatial resolution changes across timesteps: coarse representations are more important during global structure formation, while fine-resolution features become increasingly important during detail refinement. Accordingly, SSR selects the active spatial stages at each timestep. EDR further adjusts Mamba depth, based on the observation that deeper recurrent propagation produces more aggregated representations, whereas shallower processing better preserves local details. CMR complements this by adapting feature mixing and compression before scanning.
 
 Starting from the same fixed hierarchical backbone, CMR and EDR improve FID from 11.93 to 10.60 and 10.81, respectively. Jointly enabling them improves FID to 9.51, and adaptive stage selection further improves it to 9.28. Thus, the hierarchy accounts for a 2.34 FID improvement over the flat Mamba baseline, while timestep-conditioned adaptation provides an additional 2.65 FID improvement over the fixed hierarchical model.
 
-We agree that the current presentation of Table 6 does not make this distinction sufficiently explicit. We will revise Table 6 as shown below to make this distinction explicit.
+We agree that the current presentation of Table 6 does not make this distinction sufficiently explicit. **We will revise Table 6 as shown below to make this distinction explicit.**
 
 | Model | SSR | CMR | EDR | IRC | FID<sup>5k</sup> ↓ | sFID<sup>5k</sup> ↓ | FDD<sup>5k</sup> ↓ | IS<sup>5k</sup> ↑ |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -33,7 +33,7 @@ We agree that the current presentation of Table 6 does not make this distinction
 
 We thank the reviewer for pointing out that the coordination among the routers was not sufficiently formalized or verified.
 
-In MoH, SSR first selects the active hierarchical stages, and its routing output $$\alpha_t^{\mathrm{SSR}}$$ is passed to CMR and EDR. The integrated routing controller (IRC) additionally provides a shared routing prior $$p_t$$:
+In MoH, SSR first selects the active hierarchical stages, and its routing output $$\alpha_t^{\mathrm{SSR}}$$ is passed to CMR and EDR. **The integrated routing controller (IRC) additionally provides a shared routing prior $$p_t$$:**
 
 $$
 a_t^{\mathrm{SSR}}=\mathrm{MLP}_{\mathrm{SSR}}(c_t),
@@ -49,8 +49,7 @@ Thus, CMR and EDR are conditioned on both the selected hierarchy and a shared ro
 
 This dependency reflects the distinct roles of the routing spaces. SSR operates over the hierarchical stage space introduced to provide spatial and multi-scale inductive bias, while CMR and EDR refine the computation within the selected stages according to the denoising state. Since feature compression and Mamba depth jointly determine the computation path, they should be coordinated rather than optimized independently.
 
-We have added the performance of CMR+EDR without IRC to Table~6 and will revise the manuscript accordingly. CMR+EDR without IRC obtains an FID of $11.03$, whereas CMR+EDR with IRC improves it to $9.51$.
-This variant obtains an FID of $11.03$, whereas the shared IRC improves it to $9.51$. The result directly shows that simply enabling both routers is insufficient, while coordinating their decisions through a shared prior substantially improves performance.
+**We have added the performance of CMR+EDR without IRC to Table~6 and will revise the manuscript accordingly. CMR+EDR without IRC obtains an FID of $11.03$, whereas CMR+EDR with IRC improves it to $9.51$.** The result directly shows that simply enabling both routers is insufficient, while coordinating their decisions through a shared prior substantially improves performance.
 
 **W3. Efficiency claim**
 
