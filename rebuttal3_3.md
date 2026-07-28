@@ -1,6 +1,6 @@
 **Response to Reviewer UfBF**
 
-We thank the reviewer for recognizing the novelty of architectural-level routing and for noting that the learned routing behavior autonomously follows a coarse-to-fine pattern.
+We thank the reviewer for these insightful comments. We agree on the importance of clarifying the distinct roles of our backbone versus dynamic routing, formalizing router coordination, and emphasizing that architectural routing complements—rather than competes with—token- or layer-level routing.
 
 **W1. Whether the architectural-routing viewpoint drives the gain**
 
@@ -31,8 +31,6 @@ We agree that the current presentation of Table 6 does not make this distinction
 
 **Response**
 
-We thank the reviewer for pointing out that the coordination among the routers was not sufficiently formalized or verified.
-
 In MoH, SSR first selects the active hierarchical stages, and its routing output $$\alpha_t^{\mathrm{SSR}}$$ is passed to CMR and EDR. **The integrated routing controller (IRC) additionally provides a shared routing prior $$p_t$$:**
 
 $$
@@ -60,8 +58,6 @@ While MoH reduces active FLOPs and parameter footprint, current wall-clock laten
 **W4. Architectural routing versus token/layer routing**
 
 **Response**
-
-We thank the reviewer for raising this point. Our intention is not to argue that architectural routing is superior to token- or layer-level routing. Rather, they operate along different and potentially complementary axes.
 
 Token-level routing typically dispatches tokens to different expert sub-networks based on input features. In contrast, MoH adjusts the internal capacity of the Mamba backbone across diffusion timesteps by selecting spatial stages, feature mixing and compression, and Mamba propagation depth. The goal is to adapt the architecture to the coarse-to-fine denoising process in a manner consistent with the properties of Mamba.
 
