@@ -1,7 +1,3 @@
-*Mixture-of-Hierarchical Experts: Optimized Mamba Architecture for Vision Diffusion*
-
----
-
 **Response to Reviewer mhMg**
 
 We thank the reviewer for the positive assessment and for expressing support for publication. We particularly appreciate the questions regarding practical execution efficiency, the valid depth of the hierarchy, and complete inference cost. We agree that reduced arithmetic computation should be clearly distinguished from realized wall-clock performance.
