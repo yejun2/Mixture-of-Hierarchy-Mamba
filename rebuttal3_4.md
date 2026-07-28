@@ -39,16 +39,6 @@ Thus, the hierarchical structure and CMR are motivated by the lack of explicit s
 
 * **Summary:** While MoH significantly reduces active FLOPs and parameter footprint, current wall-clock latency is higher due to kernel launch overheads; we respectfully refer the reviewer to our response for **mhMg W1–W2** for the detailed analysis and planned CUDA optimizations.
 
-We agree that reduced active computation does not yet translate into wall-clock acceleration in the current implementation. Under the same RTX A6000, AMP, and batch size of 8, MoH requires 87.24 ms per forward pass, compared with 61.93 ms for ZigMa. We therefore revise our efficiency claim to reduced active computation and parameter footprint rather than faster wall-clock inference.
-
-Profiling shows that the gap is caused mainly by fragmented dynamic execution. MoH produces 3,191 kernel launches per forward pass, compared with 743 for ZigMa, while its average CUDA event duration is only 31 μs, compared with 158 μs. Routing operations such as `nonzero`, `index_select`, `index_copy_`, `scatter_`, and `topk` introduce feature gathering, branch dispatch, and output scattering.
-
-The profiler-summed CUDA self time is 116.0 ms for MoH and 122.2 ms for ZigMa. Although this is not equivalent to wall-clock latency, it is consistent with the interpretation that the gap comes from small-kernel dispatch and memory operations rather than larger dense computation.
-
-Based on this analysis, we are developing a lightweight dispatch-and-combine CUDA extension that groups samples sharing a route, removes host-side scalar checks, and fuses feature gathering and output combination without replacing the optimized Mamba selective-scan kernels. We are also investigating CUDA graph capture for frequent route configurations. We will release the optimized execution path, profiling scripts, and measurements in the public repository. Until these measurements are available, we explicitly report the current wall-clock limitation and restrict our claim to reduced active computation and parameter footprint.
-
-*(For additional details on the computational efficiency profile and runtime trade-offs, please also refer to our response to **mhMg W1–W2**.)*
-
 **W4. Routing overhead and system complexity**
 
 **Response**
