@@ -49,6 +49,8 @@ This dependency reflects the distinct roles of the routing spaces. SSR operates 
 
 **We have added the performance of CMR+EDR without IRC to Table~6 and will revise the manuscript accordingly. CMR+EDR without IRC obtains an FID of $11.03$, whereas CMR+EDR with IRC improves it to $9.51$.** The result directly shows that simply enabling both routers is insufficient, while coordinating their decisions through a shared prior substantially improves performance.
 
+We are currently analyzing the differences in routing behavior between CMR + EDR with IRC and CMR + EDR without IRC. We will share these findings in a comment during the discussion period and include the complete analysis in the Appendix of the revised manuscript.
+
 **W3. Efficiency claim**
 
 **Response**
