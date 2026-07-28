@@ -1,3 +1,5 @@
+**Response to Reviewer UfBF**
+
 We thank the reviewer for recognizing the novelty of architectural-level routing and for noting that the learned routing behavior autonomously follows a coarse-to-fine pattern.
 
 ## **W1. Whether the architectural-routing viewpoint drives the gain**
