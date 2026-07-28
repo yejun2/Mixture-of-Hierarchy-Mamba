@@ -1,6 +1,6 @@
 We thank the reviewer for recognizing the novelty of architectural-level routing and for noting that the learned routing behavior autonomously follows a coarse-to-fine pattern.
 
-W1. Whether the architectural-routing viewpoint drives the gain
+## **W1. Whether the architectural-routing viewpoint drives the gain**
 
 We thank the reviewer for this important observation. We agree that the respective roles of the hierarchical backbone and timestep-conditioned routing should be distinguished more clearly.
 
@@ -23,7 +23,7 @@ We agree that the current presentation of Table 6 does not make this distinction
 | MoH | top-3 | ✓ | ✓ | ✓ | 9.51 | 8.39 | 2.46 | 2.91 |
 | MoH | adaptive-k | ✓ | ✓ | ✓ | **9.28** | 8.50 | 2.74 | 2.95 |
 
-W2. Coordination among routers
+## **W2. Coordination among routers**
 
 We thank the reviewer for pointing out that the coordination among the routers was not sufficiently formalized or verified.
 
@@ -45,3 +45,13 @@ This dependency reflects the distinct roles of the routing spaces. SSR operates 
 
 We have added the performance of CMR+EDR without IRC to Table~6 and will revise the manuscript accordingly. CMR+EDR without IRC obtains an FID of $11.03$, whereas CMR+EDR with IRC improves it to $9.51$.
 This variant obtains an FID of $11.03$, whereas the shared IRC improves it to $9.51$. The result directly shows that simply enabling both routers is insufficient, while coordinating their decisions through a shared prior substantially improves performance.
+
+## **W3. Efficiency claim**
+
+We agree that reduced active computation does not yet translate into wall-clock acceleration in the current implementation. Under the same RTX A6000, AMP, and batch size of 8, MoH requires 87.24 ms per forward pass, compared with 61.93 ms for ZigMa. We therefore revise our efficiency claim to reduced active computation and parameter footprint rather than faster wall-clock inference.
+
+Profiling shows that the gap is caused mainly by fragmented dynamic execution. MoH produces 3,191 kernel launches per forward pass, compared with 743 for ZigMa, while its average CUDA event duration is only $31\,\mu\mathrm{s}$, compared with $158\,\mu\mathrm{s}$. Routing operations such as `nonzero`, `index_select`, `index_copy_`, `scatter_`, and `topk` introduce feature gathering, branch dispatch, and output scattering.
+
+The profiler-summed CUDA self time is 116.0 ms for MoH and 122.2 ms for ZigMa. Although this is not equivalent to wall-clock latency, it is consistent with the interpretation that the gap comes from small-kernel dispatch and memory operations rather than larger dense computation.
+
+Based on this analysis, we are developing a lightweight dispatch-and-combine CUDA extension that groups samples sharing a route, removes host-side scalar checks, and fuses feature gathering and output combination without replacing the optimized Mamba selective-scan kernels. We are also investigating CUDA graph capture for frequent route configurations. We will release the optimized execution path, profiling scripts, and measurements in the public repository. Until these measurements are available, we explicitly report the current wall-clock limitation and restrict our claim to reduced active computation and parameter footprint.
