@@ -1,3 +1,7 @@
+**W2. Coordination among routers**
+
+**Response**
+
 To understand why combining CMR and EDR without IRC does not improve performance over the single-router variants, while CMR+EDR with IRC does, we analyze their routing behavior using the 200k checkpoints. We use the same latent inputs and the same diffusion timestep grid for both models, and perform inference-only forward probing without sampling, FID evaluation, or parameter updates. Each CMR and EDR decision is mapped onto an ordinal routing-strength axis: weak/base/strong = -1/0/+1. We then define the joint routing load as `load = CMR_strength + EDR_strength`. Under this definition, `P(extreme joint state)` measures how often the two routers jointly select the same non-base extreme state, i.e., `|load| = 2` such as weak+weak or strong+strong; `P(load = 0)` measures zero-sum routing states such as strong+weak, weak+strong, or base+base; and `E|load|` measures the average magnitude of joint routing strength.
 
 | Diffusion timestep | Model | CMR strong rate | P(CMR strong, EDR strong) | P(CMR weak, EDR weak) | **P(extreme joint state)** | **P(load = 0)** | **E\|load\|** |
