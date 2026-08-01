@@ -1,9 +1,5 @@
 # NeurIPS 2026 Author Response
 
-**Submission 18049**  
-*Mixture-of-Hierarchical Experts: Optimized Mamba Architecture for Vision Diffusion*
-
----
 
 **W2. Coordination among routers**
 
